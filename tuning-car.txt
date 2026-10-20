@@ -1,0 +1,89 @@
+# The 79's handling (src/car.c), written from scratch from docs/handling-spec.md.
+# key = value; units are SI (kg, m, s, N, Nm, rad/s) unless the name says otherwise.
+# The grip values below are the "best" preset; car_preset() in src/car.c holds safer / best / wild.
+
+# --- body ---
+car_mass = 2300              # kg: kerb 2130 + tub + driver
+car_yaw_inertia = 4200       # kg m^2 about the vertical axis
+car_com_height = 0.75        # m: centre of mass above the ground (load transfer)
+car_front_share = 0.55       # share of the static load on the front axle
+car_gravity = 9.81           # m/s^2
+car_wheelbase = 3.18         # m: used only when the game gives no wheel anchors
+car_track_front = 1.51       # m: as above
+car_track_rear = 1.46        # m: as above
+car_wheel_y = -0.30          # m: wheel centre below the body origin, as above
+car_cda = 2.6                # m^2: drag coefficient times frontal area
+car_air_density = 1.225      # kg/m^3
+car_rolling = 0.02          # rolling resistance coefficient (mud-terrains on gravel)
+
+# --- tyres (grip values: presets change these) ---
+car_wheel_radius = 0.45      # m: 35-inch tyres
+car_wheel_inertia = 2.5      # kg m^2 per wheel, hub and half-shaft included
+car_mu_front = 0.85              # peak friction coefficient, front tyres
+car_mu_rear = 0.88               # peak friction coefficient, rear tyres
+car_long_grip = 1.0          # longitudinal peak as a share of the lateral peak (friction ellipse)
+car_peak_slip_angle_deg = 8  # slip angle at the peak of the side force curve
+car_peak_slip_ratio = 0.15   # slip ratio at the peak of the drive/brake force curve
+car_tail = 0.95              # force kept when fully sliding, as a share of the peak (gravel: high)
+car_tail_width = 4.0         # how slowly force falls past the peak, in multiples of the peak slip
+car_load_sens = 0.08         # loss of friction coefficient per unit of extra load over the static load
+car_low_speed = 3.0          # m/s: floor on the speed that slips are divided by (stops jitter when slow)
+car_roll_front = 0.60        # front axle's share of the lateral load transfer
+car_load_lag = 0.08          # s: how quickly the load moves (suspension settling)
+
+# --- steering and assists ---
+car_max_steer_deg = 31       # front wheel lock
+car_steer_rate = 2.5         # steering travel per second towards the stick (full lock = 1)
+car_steer_return_rate = 5.0  # the same, back towards centre
+car_steer_speed_ref = 25     # m/s: lock falls with speed, to about 70% here
+car_steer_min_frac = 0.30    # never less than this share of the lock
+car_steer_assist = 0.4       # while sliding, front wheels turn this share of the way towards the travel
+car_yaw_damp = 800          # Nm per rad/s: light yaw damping
+car_slide_from_deg = 5       # Car.slide is 0 below this slide angle
+car_slide_full_deg = 35      # and 1 above this one
+
+# --- pedals ---
+car_pedal_time = 0.10        # s: throttle, brake and handbrake ramp in
+car_pedal_release_time = 0.07 # s: and out
+
+# --- brakes ---
+car_brake_nm = 9000          # Nm: all four brakes together at full pedal
+car_brake_front = 0.65       # front share of the brake torque (discs front, drums rear)
+car_handbrake_nm = 9000      # Nm: both rear wheels together
+car_abs = 1                  # 1: foot brake held at the tyres' peak slip (no long lock-ups)
+car_abs_slip = 0.13          # slip ratio the foot brake is held at
+car_lock_damping = 4000      # Nm per rad/s: stiffness of a brake, clutch or diff while it grips (solver)
+
+# --- engine: 2.8 turbo diesel ---
+car_idle_rpm = 750
+car_limit_rpm = 4000         # rev limiter
+car_limit_hyst_rpm = 150     # fuel comes back this far below the limiter
+car_torque_idle = 280        # Nm at idle (turbo not yet working)
+car_torque_nm = 500          # Nm: the flat peak
+car_torque_from_rpm = 1600
+car_torque_to_rpm = 2800
+car_power_kw = 150           # peak power
+car_power_rpm = 3000
+car_torque_at_limit = 300    # Nm at the limiter
+car_driveline_eff = 0.95     # share of the engine's torque that reaches the clutch
+car_engine_inertia = 0.25    # kg m^2: crank and flywheel
+car_engine_fric = 20         # Nm: engine braking with the throttle shut
+car_engine_fric_rpm = 15     # Nm more per 1000 rpm
+car_idle_gain = 0.002        # idle governor: throttle per rpm below idle
+
+# --- clutch, gearbox, differential ---
+car_clutch_nm = 900          # Nm the clutch carries before it slips
+car_clutch_bite_rpm = 850    # automatic clutch starts to bite (no stalling)
+car_clutch_full_rpm = 1500   # and is fully in
+car_gear_r = 4.31
+car_gear_1 = 4.31
+car_gear_2 = 2.33
+car_gear_3 = 1.44
+car_gear_4 = 1.00
+car_gear_5 = 0.84
+car_final_drive = 5.0
+car_shift_up_rpm = 3600      # automatic gearbox
+car_shift_down_rpm = 1600
+car_shift_time = 0.12         # s with the drive cut
+car_diff_lock_nm = 300       # Nm the rear diff can pass between the wheels (0 = open)
+car_substeps = 8             # solver steps per 0.02 s step

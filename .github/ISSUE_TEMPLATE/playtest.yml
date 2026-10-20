@@ -1,0 +1,51 @@
+name: Play-test feedback
+description: How a run went in the browser build of Bush Drift
+title: "Play test: "
+labels: ["play test"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for driving! Short answers are fine. The build number is at the bottom of the play-test page.
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: From the bottom of the play-test page (for example 2026-10-20 a197238)
+  - type: input
+    id: setup
+    attributes:
+      label: Computer and browser
+      description: For example "MacBook Air M2, Chrome", "Windows laptop, Firefox" or "Pixel 7, Android app"
+  - type: dropdown
+    id: smooth
+    attributes:
+      label: Did it run smoothly?
+      options: ["Yes, smooth", "Mostly, with the odd stutter", "Choppy", "Didn't load / didn't work"]
+  - type: input
+    id: distance
+    attributes:
+      label: How far did you get, and what ended the run?
+      description: For example "2.4 km, hit a tree on the downhill" or "made the bridge!"
+  - type: dropdown
+    id: handling
+    attributes:
+      label: The handling
+      options: ["Too grippy", "About right", "Too slippery", "Hard to tell"]
+  - type: dropdown
+    id: touch
+    attributes:
+      label: On a phone, the touch buttons
+      options: ["Didn't use them", "Good as they are", "Too small", "Too big", "In the wrong places", "Hard to steer with"]
+  - type: textarea
+    id: liked
+    attributes:
+      label: What was fun?
+  - type: textarea
+    id: annoying
+    attributes:
+      label: What was annoying, confusing or broken?
+  - type: textarea
+    id: else
+    attributes:
+      label: Anything else (sound, look, scoring, ideas)?

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bush Drift (play test)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px/1.4 system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; gap: 10px; padding: 10px; box-sizing: border-box; }
+  canvas { display: block; background: #000; image-rendering: pixelated; outline: none;
+           width: min(96vw, calc((100vh - 90px) * 4 / 3)); height: auto; aspect-ratio: 4 / 3; }
+  #keys { opacity: .8; text-align: center; }
+  #status { min-height: 1.4em; }
+  kbd { background: #333; border-radius: 3px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="status">Loading…</div>
+  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <div id="keys"><kbd>←</kbd> <kbd>→</kbd> steer · <kbd>↑</kbd> accelerate · <kbd>↓</kbd> brake · <kbd>Space</kbd> handbrake ·
+    <kbd>R</kbd> restart · <kbd>H</kbd> handling · <kbd>P</kbd> pixel size · <kbd>Enter</kbd>/<kbd>Esc</kbd> menus.
+    Click the game first so it has the keyboard (and sound).</div>
+  <div id="credits" style="opacity:.55;font-size:12px;text-align:center;max-width:900px">
+    Road line © <a style="color:#aaa" href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL).
+    Elevation and tree cover from NSW DEM and imagery © State of NSW (Spatial Services), CC BY 4.0.
+    Ute from “Toyota Land Cruiser J79 Pickup Off- Road” by <a style="color:#aaa" href="https://sketchfab.com/DR1KING100K">DR1KING100K</a> (CC BY 4.0), cut down and re-coloured.
+    Sounds: CC0 recordings from Freesound (Spencer_Eisenhauer, felix.blume, TRP, mwchristian95, Alex_hears_things, Sassaby). Made with raylib. <a style="color:#aaa" href="https://github.com/aedyle/Bush-Drift">Source</a> · <a style="color:#aaa" href="https://aedyle.github.io/Bush-Drift/">Play-test page and feedback</a>.</div>
+</div>
+<script>
+  // keep the arrows and space for the game, not for scrolling the page
+  window.addEventListener('keydown', e => { if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault(); }, { passive: false });
+  const status = document.getElementById('status'), canvas = document.getElementById('canvas');
+  canvas.addEventListener('click', () => canvas.focus());
+  // browsers keep sound off until the page is used: a key press starts it as well as a click
+  window.addEventListener('keydown', () => { if (window.miniaudio && window.miniaudio.unlock) window.miniaudio.unlock(); }, true);
+  // a real finger on the screen (tablet or phone): show the on-screen buttons
+  window.addEventListener('touchstart', () => { if (Module._bd_touch_seen) Module._bd_touch_seen(); if (window.miniaudio && window.miniaudio.unlock) window.miniaudio.unlock(); }, { passive: true });
+  canvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+  var Module = {
+    canvas: canvas,
+    print: t => console.log(t), printErr: t => console.warn(t),
+    setStatus: t => { status.textContent = t || 'Click the game, then drive.'; },
+    totalDependencies: 0,
+    monitorRunDependencies: left => { Module.setStatus(left ? 'Loading… (' + left + ')' : ''); },
+  };
+  window.onerror = () => { status.textContent = 'Something went wrong: see the browser console.'; };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

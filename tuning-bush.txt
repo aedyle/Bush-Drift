@@ -1,0 +1,103 @@
+# Bush Drift's tuning values: the road, the bush, the look, scoring and the game's settings. The build
+# carries these and tuning-car.txt (the ute's handling) in the program; data/tuning-live.txt, if present,
+# is read on top at run time.
+
+# the road's cross-section (metres). road_width is the drivable gravel, wall to wall of nothing:
+# 19 Oct: "just enough for drifting". 8.5 m in sessions 1-2; 6 m from session 3 (20 Oct: too wide; real lane 4.3 m).
+road_width = 6.0
+verge_w = 1.0          # grass between the gravel and the ditch
+ditch_w = 2.8          # the table drain, edge to edge (1.8 until 20 Oct; play test: too extreme)
+ditch_depth = 0.15     # 0.5 until 20 Oct (play test: too extreme)
+bank_w = 8.0           # beyond the ditch the ground blends into the DEM over this
+tree_density = 0.30    # session 3: chance of a tall gum per 5 m cell at full canopy cover (was any tree, 0.62)
+scrub_density = 0.75   # chance of a shrub or fern per ground-layer draw at full cover
+mid_density = 0.22     # chance of a midstorey tree (blackwood, wattle, gully trees, tree ferns) per cell
+ground_density = 1.0   # ground cover (bracken, tussocks, Lomandra, litter, logs): a multiplier
+
+# run rules
+ditch_drag = 0.15      # 1/s, all four wheels in the ditch (pro rata per wheel)
+ditch_decel = 0.4      # m/s2 more, all four wheels in the ditch
+rough_drag = 0.15       # 1/s, wheels past the ditch
+grade_gravity = 1.0    # share of gravity along the slope that speeds up or slows the car
+tree_min_speed = 1.5   # m/s: a trunk touched slower than this only stops the car
+
+# chase camera
+chase_dist = 8.5
+chase_height = 3.6
+chase_look = 6.0       # aims this far ahead of the car
+chase_fov = 58
+chase_follow = 4.0     # how quickly it catches up (1/s)
+chase_turn = 2.2       # how quickly it swings round behind the direction of travel (1/s)
+
+# look
+haze_near = 30         # haze starts this far out (m)
+haze_far = 210         # (sessions 1-2: haze was full here; now haze_len below)
+haze_len = 650         # session 3: haze builds as 1 - exp(-(d - haze_near) / haze_len), thicker low down
+haze_max = 0.94
+view_radius = 330      # chunks are kept while they are this close
+pixel_mode = 1         # session 3: 0 = 480 wide, 1 = 400, 2 = 320, 3 = 240, 4 = 160 (P cycles)
+dither = 1             # ordered dither in the palette step
+
+# session 3: detail, light and distance
+near_dist = 70         # a chunk's nearby plants are drawn in full detail while the camera is this close to the chunk
+shadows = 1            # sun shadows from a shadow map round the car (0 = only the baked dapple)
+shadow_box = 170       # metres across the shadow map
+shadow_res = 2048      # its texels across
+shadow_bias = 0.35     # metres
+far_land = 1           # ground and forest canopy out to a few km (data/built/far.bin)
+road_detail = 1        # corrugations, stones, ruts, potholes and puddles drawn on the gravel
+clouds = 1
+
+# session 3b: the start. The 79 is parked in the car park just before the road, facing down it (20 Oct,
+# from the top-down render); the hut is ahead on the left.
+start_e = -15.3        # metres east of the hut's OSM centroid
+start_n = -9.3         # metres north
+start_brg = 115        # compass degrees the 79 faces (0 = the old start on the road)
+
+# session 3b: the game's own settings, all ours (the car's handling is in tuning-car.txt)
+body_half_w = 0.94     # the ute's box for trunks and posts and its shadow when the model file has no outline: 1,870 mm wide
+body_front = 2.20      # metres ahead of the body origin
+body_rear = -3.15
+body_bottom = -0.30
+body_top = 1.60
+wheel_radius = 0.45    # drawn tyres when the model has none of its own: 35-inch mud-terrains
+wheel_width = 0.30
+lean_roll = 0.75       # drawn body lean: about 4 deg leaning out at 0.55 g
+lean_pitch = 0.55      # squat under power, dive under brakes: about 2 deg at 0.4 g
+lean_hz = 1.4
+lean_damp = 0.45
+dust_rate = 22         # gravel dust: puffs a second at full slide
+dust_life = 3.2
+dust_size = 2.5
+mark_slip_from = 2.5   # m/s of contact-patch slide before a wheel leaves a mark
+mark_life = 40         # seconds a tyre mark stays
+mark_fade = 8          # seconds it takes to fade out
+skid_sound_from = 2.0  # m/s of slide before the tyres make a noise
+synth_volume = 0.5     # generated notes (score, gear changes): overall level
+synth_engine = 0.5     # engine share
+synth_tyre = 0.15      # tyre share
+synth_blip = 0.6       # multiplier, banking and gear-change notes
+use_stick = 0          # 1 = the left stick steers as well (F2 toggles)
+manual_gears = 0        # 1 = manual gearbox (S/A shift); 0 = automatic. F4 toggles
+pad_swap_ab = 1        # 1 = swap throttle and brake buttons for pads that report them the other way round
+wrong_way_time = 6     # seconds driving the wrong way before the run ends
+# recorded sound (assets/sfx/, CC0: docs/CREDITS.md)
+snd_volume = 0.9       # all recorded sound
+snd_engine = 0.85      # engine loops
+snd_gravel = 0.45      # gravel under rolling tyres, by speed
+snd_slide = 0.8        # gravel under sliding tyres, by slide speed
+snd_bush = 0.35        # birds and insects
+snd_kookaburra = 0.5   # now and then
+snd_idle_rpm = 700     # the idle loop's own revs (V8 diesel firing at ~46.5 Hz)
+snd_load_rpm = 1900    # the load loop's revs, as it sounds best
+snd_cross_from_rpm = 1000   # the idle loop gives way to the load loop between these revs
+snd_cross_to_rpm = 1900
+# drift scoring (Bush Drift's own rules: see the scoring section of src/main.c)
+score_rate = 10        # pot points a second per m/s of sideways speed
+score_base = 0.2       # plus this share of the forward speed while sliding, so low-angle drifts score well too
+score_min_kmh = 8      # no points below this forward speed (play test: every drift should score)
+score_min_deg = 3      # slide angle that counts as drifting (play test: every drift should score)
+score_mult_hold = 1.2  # seconds of unbroken sliding per step of the multiplier
+score_mult_max = 9
+score_gap = 0.6        # a break in the slide shorter than this keeps the run of slides going
+score_bank_after = 1.8 # seconds of driving straight before the pot is banked

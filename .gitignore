@@ -1,0 +1,42 @@
+# Public repo. Never commit: reference photos, NSW imagery tiles or anything drawn over them, the downloaded
+# Sketchfab model, the Android signing key, or private renders and screenshots.
+
+# downloads and built data (OSM, DEM and imagery tiles; the game data is rebuilt by `make route`)
+data/
+*.tif
+*.tiff
+imagery_*.png
+imagery_*.json
+
+# reference photos and renders matched against them
+refs/
+shots/
+private/
+
+# the downloaded 3D model and the game files built from it
+src-models/
+assets-built/
+
+# Android signing key and its password
+*.keystore
+*.jks
+keystore.pass
+
+# local tools and build outputs
+.venv/
+build/
+bench/
+bush-drift
+drift
+cartest
+*.o
+__pycache__/
+
+# browser build: outputs and downloaded raylib source
+web/out/
+web/third/
+web/lib-web/
+
+# Android build outputs and raylib built for Android (see android/README.md)
+android/out/
+android/lib/
