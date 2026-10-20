@@ -2408,6 +2408,14 @@ int main(int argc, char **argv)
         Rectangle dst = { (sw - VIEW_W * sc) * 0.5f, (sh - VIEW_H * sc) * 0.5f, VIEW_W * sc, VIEW_H * sc };
         DrawTexturePro(target.texture, (Rectangle){ 0, 0, VIEW_W, -VIEW_H }, dst, (Vector2){ 0, 0 }, 0, WHITE);
         touch_draw(screen == SCR_GAME);
+#ifdef BD_IOS
+        {   /* the iPhone play test: frame times in the corner, for testers' screenshots */
+            float fm, fw, fwa; int fs;
+            bd_ios_frame_stats(&fm, &fw, &fwa, &fs);
+            if (fm > 0) DrawText(TextFormat("%.0f fps  worst %.0f ms  slow %d", 1000.0f / fm, fwa, fs),
+                                 (int)(dst.x + 6), (int)(dst.y + 6), 10, (Color){ 255, 255, 255, 170 });
+        }
+#endif
         EndDrawing();
         if (getenv("SHOT_WINDOW") && frame == atoi(getenv("SHOT_WINDOW_AT") ? getenv("SHOT_WINDOW_AT") : "90")) { TakeScreenshot(getenv("SHOT_WINDOW")); quit = 1; }   /* tests: the whole window, buttons and all */
     }

@@ -23,4 +23,7 @@ void bd_ios_screen_viewport(void);
 /* after InitAudioDevice: the Ambient audio session (the silent switch mutes the game, other music keeps playing) */
 void bd_ios_audio_ambient(void);
 
+/* the play-test readout: the last two seconds' mean and worst frame, the worst since the start, frames over 20 ms */
+void bd_ios_frame_stats(float *mean_ms, float *worst_ms, float *worst_all_ms, int *slow_frames);
+
 #endif

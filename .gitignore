@@ -47,3 +47,4 @@ ios/lib/
 ios/build/
 ios/BushDrift.xcodeproj/
 ios/Info.plist
+ios/out/
