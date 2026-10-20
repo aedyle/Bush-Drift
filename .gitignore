@@ -40,3 +40,10 @@ web/lib-web/
 # Android build outputs and raylib built for Android (see android/README.md)
 android/out/
 android/lib/
+
+# iOS build: downloaded sources, SDL built for iOS, the generated Xcode project and build outputs (see ios/README.md)
+ios/third/
+ios/lib/
+ios/build/
+ios/BushDrift.xcodeproj/
+ios/Info.plist

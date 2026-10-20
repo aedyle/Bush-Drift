@@ -21,6 +21,14 @@
 #define VIEW_W 640
 #define VIEW_H 480
 
+/* the phone builds (Android, and iOS from session 06): the whole screen, touch buttons, GLSL ES 3.00, no Quit */
+#if defined(__ANDROID__) || defined(BD_IOS)
+#define BD_PHONE 1
+#endif
+#ifdef BD_IOS
+#include "../ios/bd_ios.h"
+#endif
+
 #ifdef HANDHELD /* what raylib's loader found on the device, for the bench report */
 extern int GLAD_GL_EXT_discard_framebuffer;
 extern const unsigned char *(*glad_glGetString)(unsigned int name);
@@ -275,7 +283,7 @@ static const char *mark_vs = "precision highp float;\nattribute vec3 vertexPosit
     " fragAlpha = vertexColor.a*k; gl_Position = (k > 0.0) ? mvp*vec4(vertexPosition, 1.0) : vec4(2.0, 2.0, 2.0, 1.0); }\n";
 static const char *mark_fs = "precision mediump float; varying float fragAlpha; void main(){ gl_FragColor = vec4(0.098, 0.098, 0.098, fragAlpha); }\n";
 #else
-#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+#if defined(__EMSCRIPTEN__) || defined(BD_PHONE)
 #define MARK_GLSL "#version 300 es\nprecision highp float;\n"
 #else
 #define MARK_GLSL "#version 330\n"
@@ -1200,7 +1208,7 @@ static int drivetest(int rows)
 
 enum { SCR_TITLE, SCR_RECORDS, SCR_GAME };
 enum { MENU_DRIVE, MENU_RECORDS, MENU_QUIT, MENU_N };
-#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+#if defined(__EMSCRIPTEN__) || defined(BD_PHONE)
 #define MENU_SHOWN 2   /* the browser and phone builds: no Quit */
 #else
 #define MENU_SHOWN MENU_N
@@ -1225,7 +1233,7 @@ static void draw_title(int sel)
         DrawText(item[i], 236, y, 30, i == sel ? RAYWHITE : (off ? menu_dim : menu_ink));
     }
     text_centred("Alexanders Hut to the Tantawangalo Creek bridge.  A tree ends the run; the ditch slows you.", 410, 10, menu_dim);
-#if defined(__ANDROID__)
+#if defined(BD_PHONE)
     DrawText("Tap Drive to start.  In the game: steer on the left; gas, brake and handbrake on the right", 20, VIEW_H - 22, 10, menu_dim);
 #elif defined(__EMSCRIPTEN__)
     DrawText("Up/Down: move     Enter: choose     Esc: back     In the game: arrows drive, Space handbrake", 20, VIEW_H - 22, 10, menu_dim);
@@ -1336,7 +1344,7 @@ static const unsigned char palette[NPAL][3] = {
 };
 
 /* GLSL written once, for desktop GL 3.3 or GL ES 2 (the phone build). */
-#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)   /* the browser (WebGL 2) and Android (GLES 3) builds: GLSL ES 3.00, to match raylib's own default shaders */
+#if defined(__EMSCRIPTEN__) || defined(BD_PHONE)   /* the browser (WebGL 2) and Android (GLES 3) builds: GLSL ES 3.00, to match raylib's own default shaders */
 #define GLSL_VS "#version 300 es\nprecision highp float;\n#define IN in\n#define OUT out\n"
 #define GLSL_FS "#version 300 es\nprecision highp float;\n#define IN in\n#define TEX texture\nout vec4 finalColor;\n#define FRAG finalColor\n"
 #elif defined(GRAPHICS_API_OPENGL_ES2)
@@ -1506,6 +1514,7 @@ enum { TB_LEFT, TB_RIGHT, TB_GAS, TB_BRAKE, TB_HAND, TB_PAUSE, TB_RESTART, TB_N 
 static TButton tb[TB_N];
 static int touch_on, touch_tap; static Vector2 touch_tap_at, touch_start; static int touch_prev_n;
 static Rectangle touch_game;   /* where the picture is on the screen */
+static float safe_l, safe_r, safe_t, safe_b;   /* the screen edges to keep buttons off (iOS: the notch and the home bar) */
 
 static void touch_update(void)
 {
@@ -1514,8 +1523,12 @@ static void touch_update(void)
     touch_game = (Rectangle){ (sw - VIEW_W * sc) * 0.5f, (sh - VIEW_H * sc) * 0.5f, VIEW_W * sc, VIEW_H * sc };
     /* button size from the screen height (about 9 mm on a phone), then each cluster centred in its side bar,
      * or pulled in from the edge far enough that its buttons don't overlap when the bars are narrow */
-    float side = touch_game.x, r = minf(sh * 0.11f, sw * 0.075f);
-    float cl = maxf(side * 0.5f, 2.4f * r), cr = sw - maxf(side * 0.5f, 2.6f * r);
+#ifdef BD_IOS
+    bd_ios_safe_area(&safe_l, &safe_r, &safe_t, &safe_b);
+#endif
+    float r = minf(sh * 0.11f, sw * 0.075f);
+    float bar_l = maxf(touch_game.x - safe_l, 0), bar_r = maxf(touch_game.x - safe_r, 0);   /* the side bars, less the safe-area insets */
+    float cl = safe_l + maxf(bar_l * 0.5f, 2.4f * r), cr = sw - safe_r - maxf(bar_r * 0.5f, 2.6f * r);
     tb[TB_LEFT] = (TButton){ cl - 1.15f * r, sh * 0.74f, r, 0, tb[TB_LEFT].down };
     tb[TB_RIGHT] = (TButton){ cl + 1.15f * r, sh * 0.74f, r, 0, tb[TB_RIGHT].down };
     tb[TB_GAS] = (TButton){ cr + 1.0f * r, sh * 0.70f, r * 1.2f, 0, tb[TB_GAS].down };
@@ -1524,7 +1537,8 @@ static void touch_update(void)
     tb[TB_PAUSE] = (TButton){ r * 0.75f, r * 0.75f, r * 0.55f, 0, tb[TB_PAUSE].down };
     tb[TB_RESTART] = (TButton){ sw - r * 0.75f, r * 0.75f, r * 0.55f, 0, tb[TB_RESTART].down };
     for (int i = 0; i < TB_N; i++) {   /* keep every button wholly on the screen */
-        tb[i].x = clampf(tb[i].x, tb[i].r * 1.05f, sw - tb[i].r * 1.05f); tb[i].y = clampf(tb[i].y, tb[i].r * 1.05f, sh - tb[i].r * 1.05f);
+        tb[i].x = clampf(tb[i].x, safe_l + tb[i].r * 1.05f, sw - safe_r - tb[i].r * 1.05f);
+        tb[i].y = clampf(tb[i].y, safe_t + tb[i].r * 1.05f, sh - safe_b - tb[i].r * 1.05f);
     }
     int n = GetTouchPointCount();
     for (int k = 0; k < n; k++) {
@@ -1566,6 +1580,9 @@ static void touch_draw(int in_game)
     }
 }
 
+#ifdef BD_IOS
+#include <SDL3/SDL_main.h>   /* SDL starts the iOS app and then calls this main */
+#endif
 #ifdef __ANDROID__
 #include <android_native_app_glue.h>
 #include <sys/stat.h>
@@ -1578,6 +1595,12 @@ int main(int argc, char **argv)
     /* the phone build: files packed in the APK are read through raylib's fopen wrapper; records and the live
      * tuning file are written to the app's own storage, which becomes the working folder */
     if (chdir(GetAndroidApp()->activity->internalDataPath) == 0) mkdir("data", 0755);
+    touch_on = 1;
+#endif
+#ifdef BD_IOS
+    /* iOS: the game's files are read from the app bundle (the working folder); records and the live tuning file
+     * go to the app's own writable folder */
+    bd_ios_setup(&erec_path, &tuning_path);
     touch_on = 1;
 #endif
     int want_title = 0, want_records = 0, fake_score = 0, mute = 0;
@@ -1681,14 +1704,19 @@ int main(int argc, char **argv)
 
 #ifdef __EMSCRIPTEN__
     SetConfigFlags(novsync ? 0 : FLAG_VSYNC_HINT);   /* the browser: a fixed 4:3 canvas that the page scales (resizing it to the window squashed the picture) */
+#elif defined(BD_IOS)
+    SetConfigFlags(FLAG_WINDOW_HIGHDPI | FLAG_WINDOW_UNDECORATED | (novsync ? 0 : FLAG_VSYNC_HINT));   /* iOS: the whole screen at full resolution, no status bar */
 #else
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | (novsync ? 0 : FLAG_VSYNC_HINT));
 #endif
 #ifndef __ANDROID__
     if (getenv("BD_TOUCH")) touch_on = 1;   /* tests: the touch buttons on the desktop (with BD_WINDOW=WxH for a phone shape) */
 #endif
-#ifdef __ANDROID__
+#ifdef BD_PHONE
     InitWindow(0, 0, "Bush Drift");   /* the phone: the whole display; the picture is centred and the touch buttons go either side */
+#ifdef BD_IOS
+    bd_ios_fit_screen();
+#endif
 #else
     InitWindow(VIEW_W * 2, VIEW_H * 2, "Bush Drift");
     { int ww, wh; if (getenv("BD_WINDOW") && sscanf(getenv("BD_WINDOW"), "%dx%d", &ww, &wh) == 2) SetWindowSize(ww, wh); }
@@ -1709,6 +1737,9 @@ int main(int argc, char **argv)
     if (rt_have) route_stream_start(&RT);
     if (rt_have) spawn_ex(&car, &score, !scripted);
     if (!mute) { sound_init(); synth_init(); }
+#ifdef BD_IOS
+    if (!mute) bd_ios_audio_ambient();   /* the silent switch mutes the game; other apps' music keeps playing */
+#endif
     int prev_gear = car.gear;
     double st_sim = 0, st_draw = 0, st_worst = 0, st_worst_all = 0, st_t0 = GetTime();
     int st_frames = 0, st_slow = 0, st_window = 0;
@@ -1718,7 +1749,7 @@ int main(int argc, char **argv)
     V3 prev_pos = car.body.pos;
     Q prev_rot = car.body.rot;
     float acc = 0;
-#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+#if defined(__EMSCRIPTEN__) || defined(BD_PHONE)
     hide_readout = 1;   /* the browser build starts clean; F1 shows the readout */
 #endif
     int show_readout = !hide_readout, sel = 0, frame = 0, shift_req = 0, quit = 0, prev_run_state = run.state;
@@ -1734,6 +1765,9 @@ int main(int argc, char **argv)
     V3 cam_pos = v3(0, 0, 0), cam_dir = v3(0, 0, 1);
 
     while (!WindowShouldClose() && !quit) {
+#ifdef BD_IOS
+        bd_ios_wait_while_background();   /* no drawing while the app is in the background (iOS stops a GL app that draws there) */
+#endif
         float dt = getenv("SHOT_SEQ") ? 1.0f / 60.0f : GetFrameTime();   /* recordings (session 3b): a fixed 60 fps step */
         if (frame > 30) {
             if (st_frames == 0) st_t0 = GetTime();
@@ -2365,6 +2399,9 @@ int main(int argc, char **argv)
             break;
         }
         BeginDrawing();
+#ifdef BD_IOS
+        bd_ios_screen_viewport();
+#endif
         ClearBackground(BLACK);
         float sw = (float)GetScreenWidth(), sh = (float)GetScreenHeight();
         float sc = minf(sw / VIEW_W, sh / VIEW_H);
