@@ -9,7 +9,7 @@ SDL. iPhone only, iOS 15 and up.
 1. Xcode (with the iOS platform: Xcode → Settings → Components), then `brew install cmake xcodegen`.
 2. `./ios/build-deps.sh`: fetches raylib 6.2 and SDL 3.4.18 (checksums checked) into `ios/third/` and builds
    SDL3 as a static xcframework in `ios/lib/`. About a minute.
-3. The game's built files (`data/built/`, `assets-built/`) come from the "Game data 1" release:
+3. The game's built files (`data/built/`, `assets-built/`) come from the "Game data 2" release:
    `./scripts/fetch-data.sh` downloads them if they're missing (step 2 runs it).
 4. `./ios/gen-project.sh` writes `ios/BushDrift.xcodeproj` from `ios/project.yml`; open it in Xcode.
 5. Simulator: pick an iPhone simulator and Run. Phone: see below.

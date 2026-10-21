@@ -1,13 +1,13 @@
 #!/bin/sh
-# Bush Drift: downloads the built game files (data/built/ and assets-built/) from the "Game data 1" release, if
+# Bush Drift: downloads the built game files (data/built/ and assets-built/) from the "Game data 2" release, if
 # any are missing, so the game builds from a fresh clone. Rebuilding them yourself needs inputs that aren't in the
 # repo (the Sketchfab model, NSW imagery): see README.md. Run by the iOS, Android and browser build scripts.
 set -e
 cd "$(dirname "$0")/.."
-URL=https://github.com/aedyle/Bush-Drift/releases/download/data-1/bush-drift-data-1.zip
-SHA=f3a6711a9dff62ebb126b4b1c9cd29f0d8a59a49af67317c248c156d4b365c9f
+URL=${BD_DATA_URL:-https://github.com/aedyle/Bush-Drift/releases/download/data-2/bush-drift-data-2.zip}   # data-2 (build B): data-1 + assets-built/world.txt
+SHA=fd9942d371fa9bab9383ef9482ed2c13c2ffe47f8448f96a4da7f76e2c905ab0
 FILES="data/built/route.csv data/built/meta.txt data/built/terrain.bin data/built/canopy.bin data/built/far.bin
-assets-built/plants.txt assets-built/hut.txt assets-built/lc79.car"
+assets-built/plants.txt assets-built/hut.txt assets-built/world.txt assets-built/lc79.car"
 
 missing=0
 for f in $FILES; do [ -f "$f" ] || missing=1; done

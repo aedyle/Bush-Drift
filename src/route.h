@@ -54,6 +54,13 @@ typedef struct {
     int nsolid;                             /* trunks, posts and hut walls (kinds 0 and 3) */
     int *tcell_first, *tcell_list;
     int nchunks;
+    /* build B: the map's edge. hut_d: metres from each grid point to the hut's open frost hollow (0 inside it);
+     * chunk_r: how far each chunk's ground reaches from its centre (the hollow makes chunk 0 bigger) */
+    float *hut_d; unsigned char *known; int hollow_cells; float *hdem_far_tmp;
+    float chunk_r[RT_MAX_CHUNKS];
+    /* the junction (follow-up): Cattlemans Link Trail leaving the route at junction_s; a stub of it every 2 m
+     * (spur_x/z/h, spur_n points) up to a gate across it at gate_t metres */
+    float junction_s, jx, jz; int spur_n; float spur_x[64], spur_z[64], spur_h[64]; float gate_t, gate_x, gate_z, gate_yaw;
     int loaded;
 } Route;
 
@@ -71,6 +78,15 @@ float route_heading_at(const Route *R, float s);         /* radians, map convent
 void route_point(const Route *R, float s, float *x, float *z);
 /* Half the drivable width and the other cross-section sizes, from the tuning values. */
 float route_half_width(void);
+/* Build B, the map's edge: how far a point is into the edge (metres; below 0 = inside the world). The ground rises
+ * into a bank from 0 to edge_w, dense trees stand past it, and the car is held back from edge_stop. */
+float route_edge(const Route *R, RtNear n, float x, float z);
+float route_edge_at(const Route *R, float x, float z);
+/* In the hut's open frost hollow (or the car park): counts as road for the off-road rule and the ditch rule. */
+int route_in_clearing(const Route *R, float x, float z);
+/* The side road (Cattlemans Link Trail's first metres): distance from its middle and how far along it (m); 1e9 if far. */
+float route_spur_dist(const Route *R, float x, float z, float *t);
+int route_on_spur(const Route *R, float x, float z);   /* on its gravel or verge, short of its end */
 /* A trunk the car's outline touches (centre pos, yaw and the outline's sizes); returns its index or -1. */
 int route_tree_hit(const Route *R, float cx, float cz, float yaw, float half_w, float front, float rear);
 /* Least radius of the centreline within `ahead` metres after s. */
@@ -86,7 +102,7 @@ float route_speed_ahead(const Route *R, float s, float ahead, float alat, float 
  * Shadows are cast by NEARLO and BACK. Vertex colour: rgb = the colour fully lit; alpha = 2 * round(127 * share of
  * the light that comes from the sun) + 1 if the spot is in the sun by the baked dapple (used beyond the shadow map).
  * Texture coordinates say what the surface is: (s, 100 + lat) on the road, (0, 1) terrain, (0, 3) far land, else (0, 0). */
-enum { RT_PART_GROUND, RT_PART_NEAR, RT_PART_NEARLO, RT_PART_BACK, RT_NPARTS };
+enum { RT_PART_GROUND, RT_PART_NEAR, RT_PART_NEARLO, RT_PART_BACK, RT_PART_EDGE, RT_NPARTS };   /* build B: EDGE = plants 40 m or more from the road (the edge's bank), drawn far, no shadows */
 #define RT_NEAR_LAT 32.0f
 typedef struct { int nverts, cap; float *v, *t; unsigned char *c; } RtPart;  /* triangles = nverts / 3 */
 typedef struct {
@@ -98,9 +114,16 @@ typedef struct {
 } RtGeom;
 /* Places the trees again (the cross-section tuning changed). */
 void route_replace_trees(Route *R);
+/* Follow-up: logs break when hit. route_log_break takes the hit post's index and returns the log's chunk (-1: not a log);
+ * route_logs_restore puts every broken log back (changed is told each chunk to rebuild). */
+int route_log_break(Route *R, int post);
+void route_logs_restore(Route *R, void (*changed)(int chunk));
 void route_build_chunk(const Route *R, int index, RtGeom *g);
 void route_geom_free(RtGeom *g);
+/* Build B: one template (a deer) set on the ground and lit, into g's GROUND part. */
+void route_build_model(const Route *R, int tpl, float x, float z, float yaw, float scale, RtGeom *g);
 void route_chunk_centre(const Route *R, int index, float *x, float *z, float *radius);
+float route_chunk_line_r(const Route *R, int index);
 
 /* The far land (session 3): ground and forest canopy out to a few km from data/built/far.bin, so the horizon is hills
  * and trees. Built once into tiles (each an RtGeom with only its GROUND part); 0 tiles if the file is missing. */
@@ -117,6 +140,7 @@ void route_stream_stop(void);
 void route_stream_want(float x, float z, float radius);
 int route_stream_take(RtGeom *out);             /* 1 = a chunk was handed over (the caller owns its arrays) */
 int route_stream_wanted(int index);
+void route_stream_invalidate(int index);          /* build this chunk again (a log broke); the old one stays drawn till then */
 int route_stream_pending(void);                 /* wanted chunks not yet handed over */
 typedef struct { long built; double ms_sum, ms_max; } RtStreamStats;
 RtStreamStats route_stream_stats(void);

@@ -20,8 +20,11 @@
 
 /* ---------------------------------------------------------------- presets */
 
-/* Only grip values change between presets. "best" restates the defaults so it can be re-applied. */
-static const struct { const char *name, *text; } presets[3] = {
+/* The handling presets (H). Build A, 21 Oct: three of them. safer is as it was; best is now a little
+ * closer to drift (less rear grip, rear-biased brakes, more low-down torque); drift takes more grip off the rear
+ * and adds power, so a push of throttle swings the tail and holds it. Every preset states every key any of them
+ * changes, so they can be cycled in any order. "best" restates the defaults (tuning-car.txt) so it can be re-applied. */
+static const struct { const char *name, *text; } presets[CAR_NPRESETS] = {
     { "safer", /* most grip, rear-biased: settles quickly */
       "car_mu_front = 0.97\n"
       "car_mu_rear = 1.04\n"
@@ -30,30 +33,42 @@ static const struct { const char *name, *text; } presets[3] = {
       "car_peak_slip_ratio = 0.15\n"
       "car_tail = 0.96\n"
       "car_tail_width = 4\n"
-      "car_load_sens = 0.08\n" },
-    { "best", /* packed gravel: grips until pushed, then slides progressively */
+      "car_load_sens = 0.08\n"
+      "car_brake_front = 0.65\n"
+      "car_torque_nm = 500\n"
+      "car_torque_idle = 280\n"
+      "car_torque_from_rpm = 1600\n" },
+    { "best", /* packed gravel; build A: rear grip 0.88 -> 0.85, brakes 65 -> 60% front, 500 -> 550 Nm from 1500 rpm */
       "car_mu_front = 0.85\n"
-      "car_mu_rear = 0.88\n"
+      "car_mu_rear = 0.85\n"
       "car_long_grip = 1.0\n"
       "car_peak_slip_angle_deg = 8\n"
       "car_peak_slip_ratio = 0.15\n"
       "car_tail = 0.95\n"
       "car_tail_width = 4\n"
-      "car_load_sens = 0.08\n" },
-    { "wild", /* looser surface: slides earlier and takes longer to settle */
-      "car_mu_front = 0.69\n"
-      "car_mu_rear = 0.72\n"
+      "car_load_sens = 0.08\n"
+      "car_brake_front = 0.60\n"
+      "car_torque_nm = 550\n"
+      "car_torque_idle = 310\n"
+      "car_torque_from_rpm = 1500\n" },
+    { "drift", /* build A: best's surface, rear grip 0.80, brakes 55% front, 650 Nm from 1300 rpm */
+      "car_mu_front = 0.85\n"
+      "car_mu_rear = 0.80\n"
       "car_long_grip = 1.0\n"
       "car_peak_slip_angle_deg = 8\n"
       "car_peak_slip_ratio = 0.15\n"
-      "car_tail = 0.92\n"
-      "car_tail_width = 3.5\n"
-      "car_load_sens = 0.08\n" },
+      "car_tail = 0.95\n"
+      "car_tail_width = 4\n"
+      "car_load_sens = 0.08\n"
+      "car_brake_front = 0.55\n"
+      "car_torque_nm = 650\n"
+      "car_torque_idle = 380\n"
+      "car_torque_from_rpm = 1300\n" },
 };
 
 const char *car_preset(int p, const char **name)
 {
-    if (p < 0 || p > 2) {
+    if (p < 0 || p >= CAR_NPRESETS) {
         if (name) *name = NULL;
         return NULL;
     }
@@ -183,6 +198,11 @@ static TyreOut tyre(float vx, float vy, float w, float n, float mu)
     float F = mu * n * f;
     o.fx = F * (px / p) * T.car_long_grip;
     o.fy = -F * (py / p);
+    if (px > 1.0f && T.car_spin_side_loss > 0) {   /* build A: a wheel spinning past its peak on loose gravel at low speed digs in and loses
+                                                    * more of its side grip (donuts); faded out by car_spin_side_to m/s along the wheel */
+        float k = T.car_spin_side_loss * clamp01(1.0f - fabsf(vx) / maxf(T.car_spin_side_to, 0.1f));
+        o.fy /= 1.0f + k * (px - 1.0f);
+    }
     return o;
 }
 
@@ -251,13 +271,13 @@ static void solve_speeds(int n, const float *m, const float *jd, const float *ta
 }
 
 /* a brake on speed index idx: with ABS it only holds the wheel down to the peak slip, otherwise to 0 */
-static int brake_link(Link *l, int idx, float cap, float vx, int abs_on)
+static int brake_link(Link *l, int idx, float cap, float vx, int abs_on, float abs_slip)
 {
     if (cap < 1e-3f) return 0;
     memset(l, 0, sizeof(*l));
     l->u[idx] = 1;
     if (abs_on && fabsf(vx) > 1.0f) {
-        float target = vx / T.car_wheel_radius * (1.0f - T.car_abs_slip);
+        float target = vx / T.car_wheel_radius * (1.0f - abs_slip);
         l->s0 = target;
         if (vx > 0) { l->lo = 0; l->hi = cap; }
         else { l->lo = -cap; l->hi = 0; }
@@ -553,7 +573,7 @@ void car_step(Car *c, const CarInput *inp)
         /* front wheels: brakes only */
         for (int i = 0; i < 2; i++) {
             Link lk;
-            int nl = brake_link(&lk, 0, cap_fb[i], vx[i], abs_on);
+            int nl = brake_link(&lk, 0, cap_fb[i], vx[i], abs_on, T.car_abs_slip);
             float mm = iw, w1 = c->wheel[i].ang_vel;
             solve_speeds(1, &mm, &jd[i], &tau[i], &w1, &lk, nl, h, kl);
             c->wheel[i].ang_vel = w1;
@@ -590,8 +610,8 @@ void car_step(Car *c, const CarInput *inp)
                 nl++;
             }
             for (int i = RL; i <= RR; i++) {
-                if (cap_hb > 1e-3f) nl += brake_link(&lk[nl], i - RL + 1, cap_hb + cap_fb[i], vx[i], 0);
-                else nl += brake_link(&lk[nl], i - RL + 1, cap_fb[i], vx[i], abs_on);
+                if (cap_hb > 1e-3f) nl += brake_link(&lk[nl], i - RL + 1, cap_hb + cap_fb[i], vx[i], 0, 0);
+                else nl += brake_link(&lk[nl], i - RL + 1, cap_fb[i], vx[i], abs_on, T.car_abs_rear_slip);   /* build A: the rears may be let slide further */
             }
             solve_speeds(3, mm, jj, tt, ww, lk, nl, h, kl);
             c->engine_ang_vel = clampf(ww[0], 0, 1.6f * T.car_limit_rpm / RPM_PER_RADS);
@@ -875,6 +895,108 @@ static float handbrake_swing(void)
     return worst;
 }
 
+/* build A: the rear axle's slide angle (the rear tyres' mean slip angle), degrees; 90 once going backwards */
+static float rear_slide(const Car *c)
+{
+    if (fwd_speed(c) < 0.5f) return vlen(c->body.vel) > 0.5f ? 90.0f : 0.0f;
+    return 0.5f * (fabsf(c->wheel[RL].slip_angle) + fabsf(c->wheel[RR].slip_angle)) * RAD2DEGF;
+}
+
+/* Turning in at 50 km/h (0.6 of the lock for 1 s, a light throttle after), with or without a full brake stab
+ * for the first 0.3 s: the largest rear slide angle in the next 3 s. */
+static float turn_in_swing(int stab)
+{
+    Car c;
+    CarInput in;
+    memset(&in, 0, sizeof(in));
+    new_car(&c);
+    set_motion(&c, 50.0f / 3.6f, 0, 0);
+    c.gear = 2; c.ratio = gear_ratio(2);
+    float worst = 0;
+    for (int step = 0; step < 3 * 50; step++) {
+        in.steer = c.time < 1.0f ? 0.6f : 0;
+        in.brake = stab && c.time < 0.3f ? 1.0f : 0;
+        in.throttle = c.time >= 0.3f ? 0.3f : 0;
+        car_step(&c, &in);
+        worst = maxf(worst, rear_slide(&c));
+    }
+    return worst;
+}
+
+/* 80-0 on full brakes with a slight, steady steer (0.05): the largest rear slide angle (a stable car stays
+ * near the steer's own small angle; a rear-heavy one swaps ends) */
+static float brake_straight_slide(void)
+{
+    Car c;
+    CarInput in;
+    memset(&in, 0, sizeof(in));
+    new_car(&c);
+    set_motion(&c, 80.0f / 3.6f, 0, 0);
+    in.brake = 1; in.steer = 0.05f;
+    float worst = 0;
+    for (int step = 0; step < 10 * 50 && fwd_speed(&c) > 1.0f; step++) {
+        car_step(&c, &in);
+        worst = maxf(worst, rear_slide(&c));
+    }
+    return worst;
+}
+
+/* A throttle push in 2nd in a bend: at kmh, 0.35 of the lock and a light throttle for 1.5 s to settle,
+ * then full throttle for 2 s. The largest rear slide angle in the push; *spun = 1 if it went past 80 deg. */
+static float power_push(float kmh, int *spun)
+{
+    Car c;
+    CarInput in;
+    memset(&in, 0, sizeof(in));
+    new_car(&c);
+    float saved = T.manual_gears;
+    T.manual_gears = 1;   /* held in 2nd */
+    set_motion(&c, kmh / 3.6f, 0, 0);
+    c.gear = 2; c.ratio = gear_ratio(2);
+    c.engine_ang_vel = fabsf(kmh / 3.6f / T.car_wheel_radius * c.ratio);
+    for (int i = RL; i <= RR; i++) c.wheel[i].ang_vel = kmh / 3.6f / T.car_wheel_radius;
+    float worst = 0;
+    *spun = 0;
+    for (int step = 0; step < 3.5f * 50; step++) {
+        in.steer = 0.35f;
+        in.throttle = c.time < 1.5f ? 0.25f : 1.0f;
+        car_step(&c, &in);
+        if (c.time >= 1.5f) worst = maxf(worst, rear_slide(&c));
+    }
+    if (worst >= 80.0f) *spun = 1;
+    T.manual_gears = saved;
+    return worst;
+}
+
+/* Donuts (build A): from rest, full lock and full throttle (a handbrake kick for the first kick_s seconds),
+ * held for 12 s. Over the last 8 s: turns made, the radius of the circle the body's middle drives, the mean
+ * body slide angle and speed. A proper donut keeps turning on a small circle with the tail well out. */
+static void donut_run(float kick_s, float *turns, float *radius, float *slide, float *speed)
+{
+    Car c;
+    CarInput in;
+    memset(&in, 0, sizeof(in));
+    new_car(&c);
+    float yaw_sum = 0, prev_yaw = car_yaw(&c), sl = 0, sp = 0; int n = 0;
+    float minx = 1e9f, maxx = -1e9f, minz = 1e9f, maxz = -1e9f;
+    for (int step = 0; step < 12 * 50; step++) {
+        in.steer = -1; in.throttle = 1;
+        in.handbrake = c.time < kick_s ? 1.0f : 0.0f;
+        car_step(&c, &in);
+        float y = car_yaw(&c), d = atan2f(sinf(y - prev_yaw), cosf(y - prev_yaw));
+        prev_yaw = y;
+        if (c.time > 4.0f) {
+            yaw_sum += d;
+            V3 lv = car_local_velocity(&c);
+            sl += vlen(c.body.vel) > 0.5f ? atan2f(fabsf(lv.x), fabsf(lv.z)) * RAD2DEGF : 0; sp += vlen(c.body.vel); n++;
+            minx = minf(minx, c.body.pos.x); maxx = maxf(maxx, c.body.pos.x); minz = minf(minz, c.body.pos.z); maxz = maxf(maxz, c.body.pos.z);
+        }
+    }
+    *turns = fabsf(yaw_sum) / TWO_PI;
+    *radius = 0.25f * ((maxx - minx) + (maxz - minz));
+    *slide = n ? sl / n : 0; *speed = n ? sp / n * 3.6f : 0;
+}
+
 static unsigned rng_state = 12345u;
 static float rnd(void)
 {
@@ -912,16 +1034,21 @@ static int random_run(void)
 
 int car_selftest(void)
 {
-    static const struct { float t100, top, g, catch_s; } target[3] = {
-        { 9.5f, 146, 0.85f, 1.0f }, { 9.9f, 146, 0.75f, 1.4f }, { 10.6f, 146, 0.62f, 2.0f } };
+    static const struct { float t100, top, g, catch_s; } target[CAR_NPRESETS] = {   /* best and drift: as measured for build A */
+        { 9.5f, 146, 0.85f, 1.0f }, { 10.4f, 146, 0.76f, 1.7f }, { 10.3f, 146, 0.74f, 2.7f } };
     Tuning saved = T;
     int misses = 0;
     printf("car selftest (flat gravel). targets: 0-100 / top / skidpad g / catch within 10%%, 80-0 grip-limited (2.5-5.5 s)\n");
-    for (int p = 0; p < 3; p++) {
+    for (int p = 0; p < CAR_NPRESETS; p++) {
         const char *name;
         const char *text = car_preset(p, &name);
         T = saved;
         tuning_apply_text(text);
+        if (getenv("CARTEST_SET")) {   /* exploring: "key = value; key = value" on top of every preset */
+            char buf[1024]; snprintf(buf, sizeof(buf), "%s", getenv("CARTEST_SET"));
+            for (char *q = buf; *q; q++) if (*q == ';') *q = '\n';
+            tuning_apply_text(buf);
+        }
         float t100, top, vh, bt, bd, locked, ms;
         accel_run(&t100, &top);
         float g = skidpad(30.0f, &vh);
@@ -933,6 +1060,18 @@ int car_selftest(void)
                name, t100, top, g, ct, bt, bd);
         printf("       (skidpad held at %.0f km/h; wheels locked %.2f s in the stop; handbrake at 40 km/h swings %.0f deg;"
                " 15 m bend at 40 km/h: %.1f m off line, slide %.0f deg)\n", vh * 3.6f, locked, swing, bend, ms);
+        {   /* build A: brake balance and power oversteer, as rear slide angles (degrees) */
+            int sp30, sp40, sp50;
+            float ti0 = turn_in_swing(0), ti1 = turn_in_swing(1), bs = brake_straight_slide();
+            float p30 = power_push(30, &sp30), p40 = power_push(40, &sp40), p50 = power_push(50, &sp50);
+            float dt0, dr0, ds0, dv0, dt1, dr1, ds1, dv1;
+            donut_run(0, &dt0, &dr0, &ds0, &dv0); donut_run(0.5f, &dt1, &dr1, &ds1, &dv1);
+            printf("       donut, full lock and throttle from rest: %.1f turns in 8 s on a %.1f m circle, slide %.0f deg, %.0f km/h;"
+                   "  with a handbrake kick: %.1f turns, %.1f m, %.0f deg, %.0f km/h\n", dt0, dr0, ds0, dv0, dt1, dr1, ds1, dv1);
+            printf("       turn-in at 50 km/h: steer only %.0f deg, with a brake stab %.0f;  80-0 braking with a slight steer %.1f deg;"
+                   "  2nd-gear throttle push at 30/40/50 km/h %.0f%s / %.0f%s / %.0f%s deg\n", ti0, ti1, bs,
+                   p30, sp30 ? " SPUN" : "", p40, sp40 ? " SPUN" : "", p50, sp50 ? " SPUN" : "");
+        }
         float got[4] = { t100, top, g, ct }, want[4] = { target[p].t100, target[p].top, target[p].g, target[p].catch_s };
         for (int k = 0; k < 4; k++)
             if (!(got[k] > 0) || fabsf(got[k] - want[k]) > 0.1f * want[k]) misses++;

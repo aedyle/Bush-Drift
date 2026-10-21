@@ -23,7 +23,7 @@ static int read_file(const char *path, ERecords *out)
         int a, b;
         float d;
         unsigned seed;
-        if (!head) { if (strncmp(line, "bush-drift records 1", 32) != 0) break; head = 1; continue; }
+        if (!head) { if (strncmp(line, "bush-drift records 1", 20) != 0) break;   /* build B: was 32, which never matched (the records never loaded) */ head = 1; continue; }
         int test = strstr(line, " test") != NULL;
         if (sscanf(line, "entry %d %d %f %x %31s", &a, &b, &d, &seed, date) == 5) {
             if (r.n < EREC_MAX && a > 0) {

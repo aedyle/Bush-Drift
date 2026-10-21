@@ -43,6 +43,11 @@ downloaded. Which species grow where comes from public data, used as reference o
 (© State of NSW, Department of Climate Change, Energy, the Environment and Water), PlantNET / Flora of NSW
 (Royal Botanic Gardens Sydney), and Atlas of Living Australia occurrence records.
 
+## Deer and the edge's scrub (build B)
+
+Made in code by `tools/make_world.py` (Blender, headless), like the plants: low-poly sambar deer (four poses) and the
+dense scrub on the map's edge. No models or textures downloaded. Why sambar: `docs/forest/deer.md`.
+
 ## Alexanders Hut (session 3)
 
 The hut and the campground props are made in code by `tools/make_hut.py`. Its plan comes from the OSM

@@ -9,7 +9,7 @@ site=$(mktemp -d)
 cp web/out/index.js web/out/index.wasm web/out/index.data "$site/"
 cp web/out/index.html "$site/play.html"
 sed "s/{{BUILD}}/$build/" web/playtest.html > "$site/index.html"
-cp web/playtest/start.png web/playtest/drift.png "$site/"
+cp web/playtest/start.png web/playtest/drift.png docs/route/birdseye.png "$site/"
 touch "$site/.nojekyll"
 remote=$(git remote get-url origin)
 cd "$site"

@@ -73,7 +73,7 @@ mark_slip_from = 2.5   # m/s of contact-patch slide before a wheel leaves a mark
 mark_life = 40         # seconds a tyre mark stays
 mark_fade = 8          # seconds it takes to fade out
 skid_sound_from = 2.0  # m/s of slide before the tyres make a noise
-synth_volume = 0.5     # generated notes (score, gear changes): overall level
+synth_volume = 0.4     # generated notes (score, gear changes): overall level (build A: 0.5 -> 0.4)
 synth_engine = 0.5     # engine share
 synth_tyre = 0.15      # tyre share
 synth_blip = 0.6       # multiplier, banking and gear-change notes
@@ -82,22 +82,66 @@ manual_gears = 0        # 1 = manual gearbox (S/A shift); 0 = automatic. F4 togg
 pad_swap_ab = 1        # 1 = swap throttle and brake buttons for pads that report them the other way round
 wrong_way_time = 6     # seconds driving the wrong way before the run ends
 # recorded sound (assets/sfx/, CC0: docs/CREDITS.md)
-snd_volume = 0.9       # all recorded sound
-snd_engine = 0.85      # engine loops
-snd_gravel = 0.45      # gravel under rolling tyres, by speed
-snd_slide = 0.8        # gravel under sliding tyres, by slide speed
-snd_bush = 0.35        # birds and insects
-snd_kookaburra = 0.5   # now and then
+snd_volume = 1.0       # all recorded sound (build A: 0.9 -> 1.0, for the engine; the others came down)
+snd_engine = 1.0       # engine loops (build A: 0.85 -> 1.0, the most a loop can take: +2.3 dB, and +5 dB over the rest)
+snd_gravel = 0.3       # gravel under rolling tyres, by speed (build A: 0.45)
+snd_slide = 0.5        # gravel under sliding tyres, by slide speed (build A: 0.8)
+snd_bush = 0.25        # birds and insects, only while driving (build A: 0.35)
+snd_kookaburra = 0.35  # now and then, only while driving (build A: 0.5)
+snd_music = 1.0        # Drift Yodel's song (assets/sfx/drift_yodel.ogg), only while the mode is on (not scaled by snd_volume)
 snd_idle_rpm = 700     # the idle loop's own revs (V8 diesel firing at ~46.5 Hz)
 snd_load_rpm = 1900    # the load loop's revs, as it sounds best
 snd_cross_from_rpm = 1000   # the idle loop gives way to the load loop between these revs
 snd_cross_to_rpm = 1900
-# drift scoring (Bush Drift's own rules: see the scoring section of src/main.c)
-score_rate = 10        # pot points a second per m/s of sideways speed
-score_base = 0.2       # plus this share of the forward speed while sliding, so low-angle drifts score well too
-score_min_kmh = 8      # no points below this forward speed (play test: every drift should score)
-score_min_deg = 3      # slide angle that counts as drifting (play test: every drift should score)
-score_mult_hold = 1.2  # seconds of unbroken sliding per step of the multiplier
+# drift scoring (Bush Drift's own rules: see the scoring section of src/main.c). Build A (21 Oct): any slide
+# scores on a smooth curve, no time-out, the pot is yours only when banked.
+score_rate = 13        # pot points a second per m/s of speed at score_ref_deg of drift angle (scaled so a drifting run lands near its old score)
+score_dead_deg = 1.0   # drift angle (the rear tyres' slip angle) below this scores nothing: straight driving, gentle grip
+score_ref_deg = 30     # the curve: rate = score_rate * speed * ((angle - dead) / ref) ^ curve
+score_curve = 1.5      # 1 = straight line, higher = small angles worth less and big angles more
+score_cap_deg = 60     # angles past this score as this (a spin is not the best drift)
+score_mult_deg = 10    # the multiplier counts its time at full rate from this angle ...
+score_mult_from_deg = 3 # ... pro rata down to nothing at this one (so grip driving doesn't build it)
+score_mult_hold = 1.2  # seconds of sliding per step of the multiplier
 score_mult_max = 9
-score_gap = 0.6        # a break in the slide shorter than this keeps the run of slides going
-score_bank_after = 1.8 # seconds of driving straight before the pot is banked
+score_autobank = 0     # 1 = the old rules: the pot banks itself after score_bank_after s straight, a gap restarts the count
+score_gap = 0.6        # (score_autobank 1) a break in the slide longer than this restarts the multiplier's count
+score_bank_after = 1.8 # (score_autobank 1) seconds below score_min_deg before the pot is banked
+score_min_deg = 3      # (score_autobank 1) drift angle that counts as still sliding
+# the ditch and the multiplier (build A). The verge is safe.
+ditch_rule = 1         # 1 = the ditch banks the pot (follow-up: leaving the road banks it), 0 = it loses it; either way the multiplier ends
+ditch_wheels = 2       # wheels that must be in the ditch (or past it) ...
+ditch_margin = 0.5     # ... at least this far past the verge's outer edge (m) ...
+ditch_time = 0.25      # ... for this long (s): a wheel brushing the ditch's edge doesn't count
+# the map's edge (build B, 21 Oct): a bank and dense trees at the outside of the tree strip; the hut's frost
+# hollow stays open to its real forest line
+edge_dist = 50         # the bank starts this far from the road's middle (m)
+edge_w = 8             # and rises over this many metres
+edge_h = 3.0           # to this height
+edge_stop = 6.5        # metres up the bank where the car is held back (the trees stand past it)
+edge_hut_gap = 18      # round the hut: the bank starts this far into the forest past the hollow's edge
+edge_trees = 0.55      # chance of a trunk per 5 m cell along the top of the bank
+edge_scrub = 1.0       # dense scrub on the bank: a multiplier
+# off the road (build B): crossing the ditch costs the pot once; past it nothing builds a pot until you're back
+offroad_from = 1.0     # the car's middle this far past the ditch's outer edge (m) is off the road
+checkpoint_every = 250 # checkpoints along the road (m), passed in order; the bridge needs all of them
+offroad_reset = 15     # seconds off the road (the car park aside) before the ute is put back on the track
+score_bank_button = 0  # 1 = the bank button (B, Right Shift, L2, BANK on phones) works again; 0 = pots bank when you leave the road
+log_keep = 0.8         # running over a log keeps this share of the speed; the log splinters into firewood
+wood_full = 15         # logs to fill the tray (the GONE WOODIN' achievement)
+# the deer (build B, 21 Oct): 20 sambar in the bush, found by driving into one
+deer_seed = 1          # where they stand: the same spots every run for the same seed
+deer_random = 0        # 1 = new spots every run (the found-so-far count then only means this run)
+minimap = 0            # 1 = a small map in the corner while driving (M toggles it)
+# donuts (build A, 21 Oct): a full turn in one direction, tail out, slow, on one spot
+donut_bonus = 500      # points straight onto the score for each donut on the road
+donut_turn_deg = 300   # how far the nose must turn, in one direction (360 was a bit much in play)
+donut_min_deg = 20     # the rear tyres' slip angle it needs throughout (30 until the follow-up)
+donut_max_kmh = 30     # and slower than this
+donut_box = 10         # the car's middle stays inside a box this many metres across
+donut_carpark = 0      # 1 = donuts in the car park score too (0: practice there, a flash and no points)
+# Drift Yodel mode (build A, 21 Oct): any donut (car park practice too) starts it; the song plays, the handling
+# is the drift preset, flames come out of the exhaust, and scoring is multiplied; a donut starts it again after
+yodel_time = 60        # seconds (the song is 60.2 s)
+yodel_score = 2        # pot points and donut bonuses are multiplied by this while it's on
+yodel_duck = 0.4       # everything else (engine, gravel, bush, notes) is turned down to this while the song plays (-8 dB)

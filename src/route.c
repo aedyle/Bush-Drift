@@ -239,6 +239,206 @@ float route_half_width(void) { return 0.5f * T.road_width; }
 
 static int in_bridge(const Route *R, float s) { return R->bridge_s1 > R->bridge_s0 && s > R->bridge_s0 - 0.5f && s < R->bridge_s1 + 0.5f; }
 
+/* ---------------------------------------------------------- the map's edge (build B) */
+/* The hut's open frost hollow: grid points joined to the hut through open ground (the imagery's canopy under 45%,
+ * DEM known, within 230 m of the hut; the lawn round the hut and the car park always), small gaps closed. hut_d is
+ * then each grid point's distance to it (a two-pass chamfer, metres). */
+/* far.bin (20 m) sampled onto the 5 m grid: heights (kept in hdem_far_tmp until route_load uses them) and forest
+ * cover (returned; NULL without the file). */
+static unsigned char *far_fill(Route *R, const char *dir)
+{
+    char p[512]; snprintf(p, sizeof(p), "%s/far.bin", dir);
+    FILE *f = fopen(p, "rb");
+    if (!f) return NULL;
+    char magic[4]; int nx, ny; float x0, y0, cell;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "BDF1", 4) || fread(&nx, 4, 1, f) != 1 || fread(&ny, 4, 1, f) != 1 ||
+        fread(&x0, 4, 1, f) != 1 || fread(&y0, 4, 1, f) != 1 || fread(&cell, 4, 1, f) != 1) { fclose(f); return NULL; }
+    size_t M = (size_t)nx * ny, N = (size_t)R->gx * R->gy;
+    float *dem = malloc(M * 4); unsigned char *cov = malloc(M);
+    int ok = fread(dem, 4, M, f) == M && fread(cov, 1, M, f) == M;
+    fclose(f);
+    if (!ok) { free(dem); free(cov); return NULL; }
+    R->hdem_far_tmp = malloc(N * sizeof(float));
+    unsigned char *out = malloc(N);
+    for (int j = 0; j < R->gy; j++)
+        for (int i = 0; i < R->gx; i++) {
+            float u = (R->gx0 + (float)i * R->cell - x0) / cell, v = (R->gz0 + (float)j * R->cell - y0) / cell;
+            size_t k = (size_t)j * R->gx + i;
+            if (u < 0 || v < 0 || u >= (float)(nx - 1) || v >= (float)(ny - 1)) { R->hdem_far_tmp[k] = NAN; out[k] = 255; continue; }
+            int a = (int)u, b = (int)v; float tu = u - (float)a, tv = v - (float)b;
+            const float *d = dem + (size_t)b * nx + a; const unsigned char *c = cov + (size_t)b * nx + a;
+            R->hdem_far_tmp[k] = (d[0] * (1 - tu) + d[1] * tu) * (1 - tv) + (d[nx] * (1 - tu) + d[nx + 1] * tu) * tv;
+            out[k] = (unsigned char)((c[0] * (1 - tu) + c[1] * tu) * (1 - tv) + (c[nx] * (1 - tu) + c[nx + 1] * tu) * tv);
+        }
+    free(dem); free(cov);
+    return out;
+}
+
+static void build_hollow(Route *R, const unsigned char *farcov)
+{
+    (void)farcov;   /* the far cover is already in canopy where there was no imagery (route_load) */
+    int nx = R->gx, ny = R->gy; size_t N = (size_t)nx * ny;
+    R->hut_d = malloc(N * sizeof(float));
+    for (size_t k = 0; k < N; k++) R->hut_d[k] = 1e9f;
+    if ((R->hut_x == 0 && R->hut_z == 0) || !R->canopy) return;
+    unsigned char *in = calloc(N, 1), *ok = calloc(N, 1);
+    int *queue = malloc(N * sizeof(int)), qh = 0, qt = 0;
+    for (int j = 0; j < ny; j++)
+        for (int i = 0; i < nx; i++) {
+            float x = R->gx0 + (float)i * R->cell, z = R->gz0 + (float)j * R->cell, dh = hypotf(x - R->hut_x, z - R->hut_z);
+            size_t k = (size_t)j * nx + i;
+            int open = R->canopy[k] < (R->known[k] ? 115 : 140);   /* past the 5 m data the cover is the far land's (20 m, blurrier: a looser line; 140 takes in the clearing's east arm without leaking) */
+            ok[k] = (dh < 45.0f) || (R->pad_r > 0 && hypotf(x - R->pad_x, z - R->pad_z) < R->pad_r + 6.0f) || (dh < 650.0f && open);
+        }
+    int hi = (int)roundf((R->hut_x - R->gx0) / R->cell), hj = (int)roundf((R->hut_z - R->gz0) / R->cell);
+    if (hi < 0 || hj < 0 || hi >= nx || hj >= ny) { free(in); free(ok); free(queue); return; }
+    in[(size_t)hj * nx + hi] = 1; queue[qt++] = hj * nx + hi;
+    while (qh < qt) {
+        int k = queue[qh++], i = k % nx, j = k / nx;
+        const int di[4] = { 1, -1, 0, 0 }, dj[4] = { 0, 0, 1, -1 };
+        for (int d = 0; d < 4; d++) {
+            int a = i + di[d], b = j + dj[d];
+            if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
+            size_t q = (size_t)b * nx + a;
+            if (ok[q] && !in[q]) { in[q] = 1; queue[qt++] = (int)q; }
+        }
+    }
+    /* close gaps of a cell or two (single trees in the paddock): grow by 2, shrink by 2 */
+    for (int pass = 0; pass < 4; pass++) {
+        unsigned char *nw = malloc(N), grow = pass < 2;
+        for (int j = 0; j < ny; j++)
+            for (int i = 0; i < nx; i++) {
+                size_t k = (size_t)j * nx + i; int any = 0, all = 1;
+                for (int b = j - 1; b <= j + 1; b++) for (int a = i - 1; a <= i + 1; a++) {
+                    int v = (a >= 0 && b >= 0 && a < nx && b < ny) ? in[(size_t)b * nx + a] : 0;
+                    any |= v; all &= v;
+                }
+                nw[k] = grow ? (unsigned char)any : (unsigned char)all;
+            }
+        free(in); in = nw;
+    }
+    R->hollow_cells = 0;
+    for (size_t k = 0; k < N; k++) { if (in[k]) { R->hut_d[k] = 0; R->hollow_cells++; } }
+    float a = R->cell, b = R->cell * 1.41421f; float *d = R->hut_d;
+    for (int j = 0; j < ny; j++) for (int i = 0; i < nx; i++) {
+        size_t k = (size_t)j * nx + i; float v = d[k];
+        if (i > 0) v = fminf(v, d[k - 1] + a);
+        if (j > 0) { v = fminf(v, d[k - nx] + a); if (i > 0) v = fminf(v, d[k - nx - 1] + b); if (i < nx - 1) v = fminf(v, d[k - nx + 1] + b); }
+        d[k] = v;
+    }
+    for (int j = ny - 1; j >= 0; j--) for (int i = nx - 1; i >= 0; i--) {
+        size_t k = (size_t)j * nx + i; float v = d[k];
+        if (i < nx - 1) v = fminf(v, d[k + 1] + a);
+        if (j < ny - 1) { v = fminf(v, d[k + nx] + a); if (i < nx - 1) v = fminf(v, d[k + nx + 1] + b); if (i > 0) v = fminf(v, d[k + nx - 1] + b); }
+        d[k] = v;
+    }
+    free(in); free(ok); free(queue);
+}
+
+static float vnoise(float x, float z);
+static float hut_dist(const Route *R, float x, float z)
+{
+    if (!R->hut_d) return 1e9f;
+    float u = (x - R->gx0) / R->cell, v = (z - R->gz0) / R->cell;
+    if (u < 0 || v < 0 || u >= (float)(R->gx - 1) || v >= (float)(R->gy - 1)) return 1e9f;
+    int i = (int)u, j = (int)v; float tu = u - (float)i, tv = v - (float)j;
+    const float *d = R->hut_d + (size_t)j * R->gx + i;
+    return (d[0] * (1 - tu) + d[1] * tu) * (1 - tv) + (d[R->gx] * (1 - tu) + d[R->gx + 1] * tu) * tv;
+}
+
+/* The road's own distance: off the side within the route, from the end points beyond them. */
+static float road_dist(const Route *R, RtNear n)
+{
+    if (n.s < 0) return hypotf(n.s, n.lat);
+    if (n.s > R->length) return hypotf(n.s - R->length, n.lat);
+    return fabsf(n.lat);
+}
+
+float route_edge(const Route *R, RtNear n, float x, float z)
+{
+    return fminf(road_dist(R, n) - T.edge_dist, hut_dist(R, x, z) - T.edge_hut_gap);
+}
+float route_edge_at(const Route *R, float x, float z) { return route_edge(R, route_near(R, x, z), x, z); }
+int route_in_clearing(const Route *R, float x, float z)
+{
+    return hut_dist(R, x, z) < 2.5f || (R->pad_r > 0 && hypotf(x - R->pad_x, z - R->pad_z) < R->pad_r + 6.0f);
+}
+
+/* ------------------------------------------------- the junction (follow-up to build B) */
+/* Cattlemans Link Trail (OSM way 395705240) meets the route where Robinsons Track ends and Cattlemens Track turns
+ * south for the bridge. Its first metres, from OSM, metres east/north of the OSM junction node (-36.722195, 149.4565126);
+ * the game's road was smoothed through the corner and passes 23 m inside it, so the stub is hung on the nearest point. */
+#define SPUR_LEN 42.0f
+#define JUNCTION_R 7.5f
+static const float SPUR_OSM[][2] = { { 0, 0 }, { -34.7f, 16.5f }, { -53.1f, 30.0f }, { -56.9f, 41.6f }, { -57.2f, 56.8f } };
+#define OSM_JX (-546.4f)
+#define OSM_JZ (-150.0f)
+static void build_spur(Route *R)
+{
+    R->spur_n = 0; R->gate_t = 0;
+    if (R->length < 1000.0f) return;
+    RtNear jn = route_near(R, OSM_JX, OSM_JZ);
+    if (jn.dist > 40.0f || jn.s < 100.0f) return;   /* not this route */
+    R->junction_s = jn.s; route_point(R, jn.s, &R->jx, &R->jz);
+    /* a Catmull-Rom curve through the OSM points, every 2 m */
+    float px[8], pz[8]; int np = (int)(sizeof(SPUR_OSM) / sizeof(SPUR_OSM[0]));
+    for (int k = 0; k < np; k++) { px[k] = R->jx + SPUR_OSM[k][0]; pz[k] = R->jz + SPUR_OSM[k][1]; }
+    float t = 0, lx = px[0], lz = pz[0];
+    R->spur_x[0] = lx; R->spur_z[0] = lz; R->spur_n = 1;
+    for (int k = 0; k + 1 < np && R->spur_n < 64; k++)
+        for (int q = 1; q <= 40 && R->spur_n < 64; q++) {
+            float u = (float)q / 40.0f, u2 = u * u, u3 = u2 * u;
+            int a = k > 0 ? k - 1 : 0, d = k + 2 < np ? k + 2 : np - 1;
+            float x = 0.5f * ((2 * px[k]) + (-px[a] + px[k + 1]) * u + (2 * px[a] - 5 * px[k] + 4 * px[k + 1] - px[d]) * u2 + (-px[a] + 3 * px[k] - 3 * px[k + 1] + px[d]) * u3);
+            float z = 0.5f * ((2 * pz[k]) + (-pz[a] + pz[k + 1]) * u + (2 * pz[a] - 5 * pz[k] + 4 * pz[k + 1] - pz[d]) * u2 + (-pz[a] + 3 * pz[k] - 3 * pz[k + 1] + pz[d]) * u3);
+            float step = hypotf(x - lx, z - lz);
+            if (step < 2.0f) continue;
+            t += step; lx = x; lz = z;
+            R->spur_x[R->spur_n] = x; R->spur_z[R->spur_n] = z; R->spur_n++;
+            if (t > SPUR_LEN + 4.0f) { k = np; break; }
+        }
+    /* heights: the DEM along it, smoothed, easing out of the road's own height over the first 20 m */
+    float raw[64];
+    for (int i = 0; i < R->spur_n; i++) raw[i] = route_dem(R, R->spur_x[i], R->spur_z[i]);
+    float h0 = route_road_h(R, R->junction_s);
+    for (int i = 0; i < R->spur_n; i++) {
+        float sum = 0; int n = 0;
+        for (int j = i - 3; j <= i + 3; j++) if (j >= 0 && j < R->spur_n) { sum += raw[j]; n++; }
+        float ti = 2.0f * (float)i;
+        R->spur_h[i] = h0 + (sum / (float)n - h0) * smooth01(ti / 20.0f);
+    }
+    /* the gate across it, about 20 m up from the edge of the road */
+    R->gate_t = 24.0f;
+    int g = (int)(R->gate_t / 2.0f);
+    R->gate_x = R->spur_x[g]; R->gate_z = R->spur_z[g];
+    R->gate_yaw = atan2f(R->spur_z[g + 1] - R->spur_z[g - 1], R->spur_x[g + 1] - R->spur_x[g - 1]);   /* along the side road */
+}
+
+float route_spur_dist(const Route *R, float x, float z, float *t)
+{
+    if (t) *t = 1e9f;
+    if (R->spur_n < 2 || fabsf(x - R->jx) > 90.0f || fabsf(z - R->jz) > 90.0f) return 1e9f;
+    float best = 1e9f, bt = 1e9f;
+    for (int i = 0; i + 1 < R->spur_n; i++) {
+        float ax = R->spur_x[i], az = R->spur_z[i], dx = R->spur_x[i + 1] - ax, dz = R->spur_z[i + 1] - az, L2 = dx * dx + dz * dz;
+        float u = L2 > 0 ? clampf(((x - ax) * dx + (z - az) * dz) / L2, 0, 1) : 0;
+        float d = hypotf(x - ax - dx * u, z - az - dz * u);
+        if (d < best) { best = d; bt = 2.0f * ((float)i + u); }
+    }
+    if (t) *t = bt;
+    return best;
+}
+static float spur_h_at(const Route *R, float t)
+{
+    float u = clampf(t / 2.0f, 0, (float)(R->spur_n - 1)); int i = (int)u; if (i >= R->spur_n - 1) i = R->spur_n - 2;
+    return R->spur_h[i] + (R->spur_h[i + 1] - R->spur_h[i]) * (u - (float)i);
+}
+int route_on_spur(const Route *R, float x, float z)
+{
+    float t, d = route_spur_dist(R, x, z, &t);
+    return d < route_half_width() + T.verge_w && t < SPUR_LEN;
+}
+
 /* The cross-section: road (a slight crown), a grass verge, the ditch, then a bank blending into the DEM. */
 static float profile(const Route *R, RtNear n, float x, float z, int *surf)
 {
@@ -255,6 +455,27 @@ static float profile(const Route *R, RtNear n, float x, float z, int *surf)
     else { h = hr - 0.04f + (route_dem(R, x, z) - (hr - 0.04f)) * smooth01((a - e2) / B); sf = SURF_ROUGH; }
     /* past the ends of the line: rough ground */
     if (n.s < -1.0f || n.s > R->length + 1.0f) { if (sf != SURF_ROUGH) sf = SURF_ROUGH; }
+    /* the junction: the side road's own cross-section where it is the higher-ranking surface */
+    if (R->spur_n > 1 && sf != SURF_ROAD && sf != SURF_DECK) {
+        float t2, d2 = route_spur_dist(R, x, z, &t2);
+        float da = hypotf(x - R->spur_x[2], z - R->spur_z[2]);   /* the junction's gravel splay, round the side road's mouth */
+        if (da < JUNCTION_R + 1.0f) { float ha = spur_h_at(R, 4.0f); if (da < JUNCTION_R) { h = ha + 0.03f; sf = SURF_ROAD; } else if (sf != SURF_VERGE) { h = ha - 0.04f; sf = SURF_VERGE; } d2 = 1e9f; }
+        if (d2 < e2 + B && t2 < SPUR_LEN) {
+            float hs = spur_h_at(R, t2), fade = 1.0f - smooth01((t2 - (SPUR_LEN - 6.0f)) / 6.0f);   /* it fades out into the bush at its end */
+            if (d2 <= W && fade > 0.5f) { float q = d2 / W; h = hs + 0.06f * (1.0f - q * q); sf = SURF_ROAD; }
+            else if (d2 <= e1 && fade > 0.5f) { h = hs - 0.04f; sf = SURF_VERGE; }
+            else if (d2 <= e2 && sf == SURF_ROUGH) { h = hs - 0.04f - T.ditch_depth * fade * sinf((float)M_PI * (d2 - e1) / D); sf = SURF_DITCH; }
+            else if (sf == SURF_ROUGH) { float hb = hs - 0.04f; h = hb + (h - hb) * fmaxf(smooth01((d2 - e2) / B), 1.0f - fade); }
+        }
+    }
+    /* build B: the map's edge, a cut bank rising out of the bush (uneven along its length so it reads as ground) */
+    if (sf == SURF_ROUGH) {
+        float e = route_edge(R, n, x, z);
+        if (e > -2.0f) {
+            float wob = 0.8f + 0.4f * vnoise(x / 23.0f, z / 23.0f);
+            h += T.edge_h * wob * smooth01(e / fmaxf(T.edge_w, 1.0f)) + 0.35f * T.edge_h * smooth01((e - T.edge_w) / 10.0f);
+        }
+    }
     /* the start pad: a flat clearing, all of it drivable */
     if (R->pad_r > 0) {
         float dx = x - R->pad_x, dz = z - R->pad_z, dp = sqrtf(dx * dx + dz * dz);
@@ -342,12 +563,15 @@ static void assign_cells(Route *R)
             float dp = hypotf(x - R->pad_x, z - R->pad_z);
             short o = -1;
             int pad = R->pad_r > 0 && dp < R->pad_r + 40.0f;
-            if (near[(size_t)j * ncx + i] || pad) {
+            int hollow = hut_dist(R, x, z) < T.edge_hut_gap + T.edge_w + 7.0f;   /* build B: the hut's whole frost hollow and its edge */
+            if (near[(size_t)j * ncx + i] || pad || hollow) {
                 RtNear n = route_near(R, x, z);
-                if (n.dist < TERRAIN_REACH || pad) o = (short)clampf(floorf(n.s / (RT_DS * RT_CHUNK)), 0, (float)(R->nchunks - 1));
+                if ((n.dist < TERRAIN_REACH && route_edge(R, n, x, z) < T.edge_w + 7.0f) || pad || hollow)
+                    o = (short)clampf(floorf(n.s / (RT_DS * RT_CHUNK)), 0, (float)(R->nchunks - 1));
             }
             R->owner[(size_t)j * ncx + i] = o;
             if (o >= 0) cnt[o]++;
+            if (o >= 0) { float cx, cz, r; route_chunk_centre(R, o, &cx, &cz, &r); r = hypotf(x - cx, z - cz) + R->cell; if (r > R->chunk_r[o]) R->chunk_r[o] = r; }
         }
     free(near);
     R->cell_first = calloc(RT_MAX_CHUNKS + 1, sizeof(int));
@@ -436,6 +660,39 @@ static RtTree *tl_add(TreeList *L, float x, float z, int t0, int kind, uint32_t 
     return r;
 }
 
+/* The gate across the side road (follow-up): a locked boom gate, drawn, with hidden solid posts along the boom, and a
+ * line of fence posts out into the bush either side. Spliced into the junction chunk's list. */
+static void add_gate(Route *R)
+{
+    if (R->gate_t <= 0 || R->nchunks < 1) return;
+    int c = (int)clampf(floorf(R->junction_s / (RT_DS * RT_CHUNK)), 0, (float)(R->nchunks - 1));
+    RtTree add[64]; int na = 0;
+    float ax = -sinf(R->gate_yaw), az = cosf(R->gate_yaw);   /* across the side road */
+    int tg = route_template_find("boomgate", 0, 0), tf = route_template_find("fencepost", 0, 0);
+    if (tg >= 0) {
+        RtTree *q = &add[na++]; memset(q, 0, sizeof(*q));
+        q->x = R->gate_x; q->z = R->gate_z; q->kind = 4; q->t0 = (short)tg; q->t1 = -1; q->lat = 99.0f; q->scale = 1.0f; q->h = route_template(tg)->h;
+        q->yaw = R->gate_yaw + (float)(M_PI / 2);
+    }
+    for (float a = -4.4f; a <= 4.41f; a += 0.45f) {   /* the boom: solid all the way across */
+        RtTree *q = &add[na++]; memset(q, 0, sizeof(*q));
+        q->x = R->gate_x + ax * a; q->z = R->gate_z + az * a; q->r = 0.25f; q->kind = 3; q->t0 = q->t1 = -1; q->lat = 99.0f;
+    }
+    for (int sd = -1; sd <= 1; sd += 2)   /* fence posts out past the ditch, 1.5 m apart */
+        for (float a = 5.9f; a < 13.0f && na < 64; a += 1.5f) {
+            float x = R->gate_x + ax * a * (float)sd, z = R->gate_z + az * a * (float)sd;
+            RtTree *q = &add[na++]; memset(q, 0, sizeof(*q));
+            q->x = x; q->z = z; q->r = 0.12f; q->kind = tf >= 0 ? 0 : 3; q->t0 = (short)tf; q->t1 = -1; q->lat = 99.0f; q->scale = 1.0f; q->h = 1.3f;
+            q->yaw = R->gate_yaw;
+        }
+    R->tree = realloc(R->tree, sizeof(RtTree) * (size_t)(R->ntree + na));
+    int at = R->tree_first[c + 1];
+    memmove(R->tree + at + na, R->tree + at, sizeof(RtTree) * (size_t)(R->ntree - at));
+    memcpy(R->tree + at, add, sizeof(RtTree) * (size_t)na);
+    R->ntree += na;
+    for (int k = c + 1; k <= R->nchunks; k++) R->tree_first[k] += na;
+}
+
 /* Trees: per 5 m cell, by how wooded the imagery says it is and where along the road it is. Open frost-hollow
  * grass round the hut with a snow gum fringe and a hard forest edge; tall gums with a midstorey and a ground layer
  * along the track; tree ferns and gully trees near the creeks. Trunks stay out past the ditch; soft plants may
@@ -462,15 +719,29 @@ static void place_trees(Route *R)
             hollow *= 1.0f - forest * smooth01((dh - 30.0f) / 10.0f);   /* session 3b: the hollow is the open grass; where the imagery has forest
                                                                          * 35 m or more out (the edge west of the hut) it stays forest; the
                                                                          * scrub band hugging the hut's north-east side does not grow gums */
-            if (fabsf(nc.lat) > TERRAIN_REACH - 2.0f) continue;
-            for (int draw = 0; draw < 8; draw++) {
+            float ec = route_edge(R, nc, cx, cz);
+            if (ec > T.edge_w + 6.0f) continue;   /* build B: nothing past the edge's trees (was 62 m from the road) */
+            for (int draw = 0; draw < 10; draw++) {
                 float x = R->gx0 + ((float)i + rnd(&sd)) * R->cell, z = R->gz0 + ((float)j + rnd(&sd)) * R->cell;
                 RtNear nr = route_near(R, x, z);
                 float a = fabsf(nr.lat), dp = hypotf(x - R->pad_x, z - R->pad_z), roll = rnd(&sd);
                 int on_route = nr.s > -2.0f && nr.s < R->length + 2.0f;
                 int t0 = -1, kind = 2;
-                float p = 0;
-                if (draw == 0) {            /* a tall gum */
+                float p = 0, e = draw >= 8 || draw == 0 ? route_edge(R, nr, x, z) : 0;
+                if (draw == 0 && e > T.edge_w + 5.0f) continue;
+                if (a > 64.0f && draw != 8 && rnd(&sd) < 0.5f) continue;   /* build B: the hut clearing's forest edge, out past the old strip: half as thick */
+                if (draw == 8 && a > 64.0f && rnd(&sd) < 0.35f) continue;
+                if (draw == 2 && a > 40.0f) continue;                  /* build B: 40 m out, background only: no midstorey ... */
+                if (draw == 0 && a > 40.0f && rnd(&sd) < 0.4f) continue;   /* ... and fewer tall gums (the edge's row of trunks closes the view) */
+                if (draw == 8) {            /* build B: the edge, a close row of trunks along the top of the bank */
+                    if (e < T.edge_stop + 2.0f || e > T.edge_w + 5.0f) continue;
+                    p = T.edge_trees;
+                    if (roll < p) { float r2 = rnd(&sd); t0 = tsel(r2 < 0.45f ? "messmate" : r2 < 0.7f ? "brownbarrel" : r2 < 0.85f ? "blackwood" : "greygum", &sd, 3, 0); kind = 0; }
+                } else if (draw == 9) {     /* ... and thick scrub on its face */
+                    if (e < -4.0f || e > T.edge_w + 4.0f) continue;
+                    p = 0.9f * T.edge_scrub;
+                    if (roll < p) t0 = tsel("edgescrub", &sd, 3, 0);
+                } else if (draw == 0) {            /* a tall gum */
                     p = T.tree_density * forest * (1.0f - 0.85f * hollow);
                     if (roll < p) {
                         float r2 = rnd(&sd);
@@ -518,10 +789,11 @@ static void place_trees(Route *R)
                 int is_log = !strcmp(tt->name, "log"), is_litter = !strcmp(tt->name, "litter");
                 float keep = kind == 0 ? e2 + tt->r * 1.6f + 0.5f : is_log ? e2 + 2.5f : is_litter ? W + 0.3f : e1 - 0.2f;
                 if (on_route && a < keep) continue;
+                if (R->spur_n > 2) { float t2, d2 = route_spur_dist(R, x, z, &t2); if ((d2 < keep && t2 < SPUR_LEN - 4.0f) || hypotf(x - R->spur_x[2], z - R->spur_z[2]) < JUNCTION_R + keep - W) continue; }   /* off the side road and its splay too */
                 if (dp < R->pad_r + (kind == 0 ? 5.0f : 1.0f)) continue;
                 if (in_bridge(R, nr.s) && a < W + 3.0f) continue;
                 if (hut && dh < 12.0f && (kind == 0 || hypotf(x - R->hut_x, z - R->hut_z) < 9.0f)) continue;
-                RtTree *nt = tl_add(&L, x, z, t0, kind, &sd, a);
+                RtTree *nt = tl_add(&L, x, z, t0, kind, &sd, fminf(a, 97.0f));   /* build B: plants far out in the hollow are still plants (lat over 90 = the hut's props) */
                 if (nt && is_log) {   /* session 3b (the author): logs are hard. Near the road they lie roughly along it; hidden posts along each make it solid */
                     static const float logL[3] = { 7.0f, 11.0f, 4.5f }, logR[3] = { 0.35f, 0.5f, 0.25f };
                     float half = 0.5f * logL[tt->variant % 3] * nt->scale, rad = logR[tt->variant % 3] * nt->scale;
@@ -551,6 +823,7 @@ static void place_trees(Route *R)
     }
     R->tree_first[R->nchunks] = L.n;
     R->tree = L.t; R->ntree = L.n;
+    add_gate(R);
     route_add_props(R);
     /* by cell, for collisions: trunks, posts and the hut's walls */
     int ncz = R->gy - 1, nc = ncx * ncz;
@@ -704,6 +977,7 @@ int route_tree_hit(const Route *R, float cx, float cz, float yaw, float half_w, 
             int c = j * ncx + i;
             for (int q = R->tcell_first[c]; q < R->tcell_first[c + 1]; q++) {
                 const RtTree *t = &R->tree[R->tcell_list[q]];
+                if (t->kind == 6) continue;   /* a broken log's posts */
                 float dx = t->x - cx, dz = t->z - cz;
                 float lf = dx * fx + dz * fz, lr = dx * rx + dz * rz;
                 float of = lf > front ? lf - front : (lf < rear ? rear - lf : 0), orr = fmaxf(fabsf(lr) - half_w, 0);
@@ -721,7 +995,17 @@ void route_chunk_centre(const Route *R, int index, float *x, float *z, float *ra
     sx /= (float)k; sz /= (float)k;
     float r = 0;
     for (int i = i0; i <= i1; i++) r = fmaxf(r, hypotf(R->x[i] - sx, R->z[i] - sz));
-    *x = sx; *z = sz; *radius = r + TERRAIN_REACH;
+    *x = sx; *z = sz; *radius = fmaxf(r + TERRAIN_REACH, R->chunk_r[index]);
+}
+float route_chunk_line_r(const Route *R, int index)   /* build B: the chunk's own stretch of road (its full radius can take in the hut's clearing) */
+{
+    int i0 = index * RT_CHUNK, i1 = i0 + RT_CHUNK; if (i1 > R->n - 1) i1 = R->n - 1;
+    float sx = 0, sz = 0; int k = 0;
+    for (int i = i0; i <= i1; i++) { sx += R->x[i]; sz += R->z[i]; k++; }
+    sx /= (float)k; sz /= (float)k;
+    float r = 0;
+    for (int i = i0; i <= i1; i++) r = fmaxf(r, hypotf(R->x[i] - sx, R->z[i] - sz));
+    return r + TERRAIN_REACH;
 }
 
 int route_load(Route *R, const char *dir)
@@ -737,11 +1021,27 @@ int route_load(Route *R, const char *dir)
     snprintf(p, sizeof(p), "%s/terrain.bin", dir);
     snprintf(q, sizeof(q), "%s/canopy.bin", dir);
     if (!read_grid(R, p, q)) return 0;
+    if (R->hut_x != 0 || R->hut_z != 0) {   /* build B: the grid stops 120 m north of the car park, short of the hut's clearing:
+                                             * grow it north (no data there yet: far_fill gives it the far land's heights) */
+        int need = (int)ceilf((R->hut_z + 680.0f - (R->gz0 + (float)(R->gy - 1) * R->cell)) / R->cell);
+        if (need > 0) {
+            size_t old = (size_t)R->gx * R->gy, add = (size_t)R->gx * need;
+            R->dem = realloc(R->dem, (old + add) * sizeof(float));
+            for (size_t k = old; k < old + add; k++) R->dem[k] = NAN;
+            if (R->canopy) { R->canopy = realloc(R->canopy, old + add); memset(R->canopy + old, 255, add); }
+            R->gy += need;
+        }
+    }
     /* heights relative to the start pad */
     R->elev0 = isfinite(pad_elev) ? pad_elev : R->h[0];
     for (int i = 0; i < R->n; i++) { R->h[i] -= R->elev0; R->hdem[i] -= R->elev0; }
     size_t N = (size_t)R->gx * R->gy;
-    for (size_t k = 0; k < N; k++) R->dem[k] = isfinite(R->dem[k]) ? R->dem[k] - R->elev0 : 0.0f;
+    R->known = malloc(N);
+    unsigned char *farcov = far_fill(R, dir);   /* build B: the far land's heights where the 5 m DEM has none (was flat at the pad's level) */
+    if (farcov && R->canopy) for (size_t k = 0; k < N; k++) if (!isfinite(R->dem[k]) && R->canopy[k] == 255) R->canopy[k] = farcov[k];   /* no imagery or DEM: the far land's cover */
+    for (size_t k = 0; k < N; k++) { R->known[k] = isfinite(R->dem[k]); R->dem[k] = isfinite(R->dem[k]) ? R->dem[k] - R->elev0 : 0.0f; }
+    for (size_t k = 0; k < N; k++) if (!R->known[k] && farcov && isfinite(R->hdem_far_tmp[k])) R->dem[k] = R->hdem_far_tmp[k] - R->elev0;
+    free(R->hdem_far_tmp); R->hdem_far_tmp = NULL;
     if (!pad_h_given) R->pad_h = 0;
     if (R->bridge_s1 <= R->bridge_s0) R->bridge_s0 = R->bridge_s1 = 0;
     if (meta < 2) { R->start_x = R->x[3]; R->start_z = R->z[3]; R->start_yaw = (float)(M_PI / 2) - R->head[3]; }
@@ -760,6 +1060,9 @@ int route_load(Route *R, const char *dir)
         while (R->ford_lo > R->ford_s - 30 && route_road_h(R, R->ford_lo) < R->ford_water) R->ford_lo -= 0.5f;
         while (R->ford_hi < R->ford_s + 30 && route_road_h(R, R->ford_hi) < R->ford_water) R->ford_hi += 0.5f;
     }
+    build_spur(R);
+    build_hollow(R, farcov);
+    free(farcov);
     assign_cells(R);
     place_trees(R);
     R->loaded = 1;
@@ -767,6 +1070,34 @@ int route_load(Route *R, const char *dir)
 }
 
 void route_replace_trees(Route *R) { free(R->tree); R->tree = NULL; place_trees(R); }
+
+/* Logs that break (follow-up): a log is its drawn tree followed by its hidden posts (kind 5). Hitting a post breaks the
+ * log: it stops being drawn and its posts stop being solid (kind 6) until route_logs_restore. Returns the log's chunk. */
+static int broken[4096], nbroken;
+static int chunk_of(const Route *R, int k) { int c = 0; while (c < R->nchunks - 1 && R->tree_first[c + 1] <= k) c++; return c; }
+int route_log_break(Route *R, int post)
+{
+    if (post < 0 || post >= R->ntree || R->tree[post].kind != 5) return -1;
+    int k = post;
+    while (k > 0 && R->tree[k].kind == 5) k--;
+    RtTree *log = &R->tree[k];
+    if (log->t0 < 0 || strcmp(route_template(log->t0)->name, "log")) return -1;
+    if (nbroken < 4096) broken[nbroken++] = k;
+    log->seed = (uint32_t)log->t0 | ((uint32_t)(unsigned short)log->t1 << 16);   /* kept to put it back */
+    log->t0 = log->t1 = -1;
+    for (int q = k + 1; q < R->ntree && R->tree[q].kind == 5; q++) R->tree[q].kind = 6;
+    return chunk_of(R, k);
+}
+void route_logs_restore(Route *R, void (*changed)(int chunk))
+{
+    for (int i = 0; i < nbroken; i++) {
+        RtTree *log = &R->tree[broken[i]];
+        log->t0 = (short)(log->seed & 0xffff); log->t1 = (short)(log->seed >> 16);
+        for (int q = broken[i] + 1; q < R->ntree && R->tree[q].kind == 6; q++) R->tree[q].kind = 5;
+        if (changed) changed(chunk_of(R, broken[i]));
+    }
+    nbroken = 0;
+}
 
 /* ------------------------------------------------------------- geometry */
 
@@ -937,6 +1268,7 @@ static float terrain_vertex_h(const Route *R, float x, float z, float ro)
     float dp = hypotf(x - R->pad_x, z - R->pad_z);
     if (R->pad_r > 0 && dp < R->pad_r + 2.0f && fabsf(n.lat) > route_half_width()) return h;
     if (fabsf(n.lat) < ro - 0.5f) h -= 0.6f; /* under the road ribbon: kept out of sight */
+    else { float t2, d2 = route_spur_dist(R, x, z, &t2); if ((d2 < route_half_width() + T.verge_w - 0.3f && t2 < SPUR_LEN - 6.0f) || (R->spur_n > 2 && hypotf(x - R->spur_x[2], z - R->spur_z[2]) < JUNCTION_R - 0.3f)) h -= 0.4f; }   /* and under the side road's */
     return h;
 }
 
@@ -999,7 +1331,7 @@ static void build_trees(const Route *R, int index, GB *b)
         if (t->t0 < 0) continue;
         float gy = route_height(R, t->x, t->z, NULL);
         const RtTemplate *t0 = &tpl[t->t0];
-        int prop = t->lat > 90.0f;
+        int prop = t->lat > 98.0f;   /* the hut's props are at 99 (plants are capped at 97) */
         int is_log = !strcmp(t0->name, "log");
         float y = gy - (is_log ? 0.15f : 0.0f);
         int nt0 = 0;
@@ -1008,7 +1340,7 @@ static void build_trees(const Route *R, int index, GB *b)
             b->part = RT_PART_NEAR; put_template(b, t0, t->x, y, t->z, t->yaw, t->scale); nt0 = t0->ntri;
             if (t->t1 >= 0) { b->part = RT_PART_NEARLO; put_template(b, &tpl[t->t1], t->x, y, t->z, t->yaw, t->scale); }
         } else if (t->t1 >= 0) {
-            b->part = RT_PART_BACK; put_template(b, &tpl[t->t1], t->x, y, t->z, t->yaw, t->scale); nt0 = tpl[t->t1].ntri;
+            b->part = t->lat >= 40.0f ? RT_PART_EDGE : RT_PART_BACK; put_template(b, &tpl[t->t1], t->x, y, t->z, t->yaw, t->scale); nt0 = tpl[t->t1].ntri;
         }
         if (t->kind == 0) b->g->ntri_trees += nt0; else b->g->ntri_scrub += nt0;
     }
@@ -1063,6 +1395,55 @@ static void build_bridge(const Route *R, GB *b)
     }
 }
 
+/* The side road's gravel and verges (the ditches and banks come from the terrain), from where it leaves the road's
+ * edge to where it fades into the bush; a hair above the ground under it. */
+static void build_spur_ribbon(const Route *R, GB *b)
+{
+    float W = route_half_width(), e1 = W + T.verge_w;
+    const float st[] = { -e1, -W, -0.5f * (W + 1.15f), -1.15f, -0.45f, 0, 0.45f, 1.15f, 0.5f * (W + 1.15f), W, e1 };
+    const int ns = (int)(sizeof(st) / sizeof(st[0]));
+    V3 prev[16]; int have = 0;
+    for (int i = 0; i < R->spur_n && 2.0f * (float)i < SPUR_LEN - 5.0f; i++) {
+        int a = i > 0 ? i - 1 : 0, c = i + 1 < R->spur_n ? i + 1 : i;
+        float hd = atan2f(R->spur_z[c] - R->spur_z[a], R->spur_x[c] - R->spur_x[a]), nx = -sinf(hd), nz = cosf(hd);
+        V3 row[16];
+        for (int k = 0; k < ns; k++) {
+            float x = R->spur_x[i] + nx * st[k], z = R->spur_z[i] + nz * st[k];
+            row[k] = v3(x, route_height(R, x, z, NULL) + 0.02f, z);
+        }
+        if (have)
+            for (int k = 0; k + 1 < ns; k++) {
+                float amid = fabsf(0.5f * (st[k] + st[k + 1]));
+                float mx = 0.25f * (row[k].x + row[k + 1].x + prev[k].x + prev[k + 1].x), mz = 0.25f * (row[k].z + row[k + 1].z + prev[k].z + prev[k + 1].z);
+                RtNear mn = route_near(R, mx, mz);
+                if (fabsf(mn.lat) < W + 0.3f) continue;   /* over the main road: it shows through */
+                Col col2 = amid < 0.45f ? C_CROWN : amid < 1.15f ? C_TRACK : amid < W ? C_ROADSIDE : C_VERGE;
+                if (amid < W) col2 = cmul(col2, 0.92f + 0.16f * vnoise(mx / 1.7f, mz / 1.7f));
+                gb_tri(b, prev[k], prev[k + 1], row[k + 1], col2, 1, prev[k]);
+                gb_tri(b, prev[k], row[k + 1], row[k], col2, 1, prev[k]);
+                b->g->ntri_road += 2;
+            }
+        memcpy(prev, row, sizeof(V3) * (size_t)ns); have = 1;
+    }
+    /* the splay: a disc of gravel round the mouth, rings out to JUNCTION_R and a grass edge */
+    float cx = R->spur_x[2], cz = R->spur_z[2];
+    const float rr[] = { 0, 2.5f, 5.0f, JUNCTION_R, JUNCTION_R + 1.0f };
+    for (int ri = 0; ri < 4; ri++)
+        for (int k = 0; k < 24; k++) {
+            float a0 = (float)k * 6.2831853f / 24.0f, a1 = (float)(k + 1) * 6.2831853f / 24.0f;
+            V3 q[4]; float r0 = rr[ri], r1 = rr[ri + 1];
+            float px4[4] = { cx + cosf(a0) * r0, cx + cosf(a1) * r0, cx + cosf(a1) * r1, cx + cosf(a0) * r1 };
+            float pz4[4] = { cz + sinf(a0) * r0, cz + sinf(a1) * r0, cz + sinf(a1) * r1, cz + sinf(a0) * r1 };
+            for (int m = 0; m < 4; m++) q[m] = v3(px4[m], route_height(R, px4[m], pz4[m], NULL) + 0.02f, pz4[m]);
+            float mx = 0.25f * (px4[0] + px4[1] + px4[2] + px4[3]), mz = 0.25f * (pz4[0] + pz4[1] + pz4[2] + pz4[3]);
+            if (fabsf(route_near(R, mx, mz).lat) < W + 0.3f) continue;   /* the main road shows through */
+            Col c2 = ri == 3 ? C_VERGE : cmul(ri == 0 ? C_CROWN : C_TRACK, 0.92f + 0.16f * vnoise(mx / 1.7f, mz / 1.7f));
+            gb_tri(b, q[0], q[1], q[2], c2, 1, q[0]);
+            gb_tri(b, q[0], q[2], q[3], c2, 1, q[0]);
+            b->g->ntri_road += 2;
+        }
+}
+
 void route_build_chunk(const Route *R, int index, RtGeom *g)
 {
     struct timespec t0, t1;
@@ -1073,6 +1454,7 @@ void route_build_chunk(const Route *R, int index, RtGeom *g)
     g->base_x = R->x[i0]; g->base_z = R->z[i0];
     GB b = { g, RT_PART_GROUND, R, 0, 0, -1 };
     build_ribbon(R, index, &b);
+    if (R->spur_n > 1 && index == (int)(R->junction_s / (RT_DS * RT_CHUNK))) build_spur_ribbon(R, &b);
     build_terrain(R, index, &b);
     build_trees(R, index, &b);
     float c0 = (float)i0 * RT_DS, c1 = c0 + RT_CHUNK * RT_DS;
@@ -1081,6 +1463,16 @@ void route_build_chunk(const Route *R, int index, RtGeom *g)
     if (R->bridge_s1 > R->bridge_s0 && R->bridge_s0 >= c0 && R->bridge_s0 < c1) build_bridge(R, &b);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     g->build_ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+}
+
+/* Build B: one template on its own (a deer), set on the ground at x, z and lit like the plants, into g's GROUND part. */
+void route_build_model(const Route *R, int t, float x, float z, float yaw, float scale, RtGeom *g)
+{
+    memset(g, 0, sizeof(*g));
+    g->index = -1; g->base_x = x; g->base_z = z;
+    if (t < 0 || t >= ntpl) return;
+    GB b = { g, RT_PART_GROUND, R, 0, 0, -1 };
+    put_template(&b, &tpl[t], x, route_height(R, x, z, NULL), z, yaw, scale);
 }
 
 void route_geom_free(RtGeom *g)
@@ -1119,9 +1511,18 @@ int route_far_build(const Route *R, const char *path, RtGeom *tiles, int max_til
             }
             c = c / (float)nc / 255.0f;
             float d = dist[k], forest = smooth01((c - 0.35f) / 0.4f);
+            /* build B: the hut's frost hollow is near ground too, out to its own edge (the same distance into the edge as by the road) */
+            d = fminf(d, hut_dist(R, x0 + (float)(i * step) * cell, y0 + (float)(j * step) * cell) - T.edge_hut_gap + T.edge_dist);
             float canopy = 28.0f * forest * (0.8f + 0.4f * vnoise((float)i * 0.7f, (float)j * 0.7f));
             float wall = smooth01((d - 58.0f) / 55.0f);
-            vh[(size_t)j * (cx + 1) + i] = dem[k] - R->elev0 + canopy * wall - 2.0f * (1.0f - smooth01((d - 52.0f) / 10.0f));
+            float hv = dem[k] - R->elev0 + canopy * wall - 2.0f * (1.0f - smooth01((d - 52.0f) / 10.0f));
+            if (d < 66.0f) {   /* follow-up: under the near ground the 40 m triangles poked up through steep hillsides out in the bush:
+                                * drop each point to the lowest near ground within a cell of it, less 1.5 m */
+                float vx = x0 + (float)(i * step) * cell, vz = y0 + (float)(j * step) * cell, lo = 1e9f;
+                for (float dz = -22.0f; dz <= 22.0f; dz += 5.5f) for (float dx = -22.0f; dx <= 22.0f; dx += 5.5f) lo = fminf(lo, route_dem(R, vx + dx, vz + dz));
+                hv += (fminf(hv, lo - 1.5f) - hv) * (1.0f - smooth01((d - 58.0f) / 8.0f));
+            }
+            vh[(size_t)j * (cx + 1) + i] = hv;
             vc[(size_t)j * (cx + 1) + i] = (unsigned char)(forest * 255.0f);
         }
     for (int tz = 0; tz < ntz && nt < max_tiles; tz++)
@@ -1158,7 +1559,7 @@ static struct {
     pthread_t th; pthread_mutex_t mu; pthread_cond_t cv;
     int running, stop;
     const Route *R;
-    unsigned char want[RT_MAX_CHUNKS], state[RT_MAX_CHUNKS];
+    unsigned char want[RT_MAX_CHUNKS], state[RT_MAX_CHUNKS], redo[RT_MAX_CHUNKS];
     float dist[RT_MAX_CHUNKS];
     RtGeom ready[RT_MAX_CHUNKS];
     RtStreamStats st;
@@ -1180,7 +1581,8 @@ static void *stream_main(void *arg)
         route_build_chunk(S.R, pick, &g);
         pthread_mutex_lock(&S.mu);
         S.st.built++; S.st.ms_sum += g.build_ms; if (g.build_ms > S.st.ms_max) S.st.ms_max = g.build_ms;
-        if (S.want[pick]) { S.ready[pick] = g; S.state[pick] = CS_READY; }
+        if (S.redo[pick]) { S.redo[pick] = 0; route_geom_free(&g); S.state[pick] = CS_NONE; }   /* changed while it was being built */
+        else if (S.want[pick]) { S.ready[pick] = g; S.state[pick] = CS_READY; }
         else { route_geom_free(&g); S.state[pick] = CS_NONE; }
     }
     pthread_mutex_unlock(&S.mu);
@@ -1248,6 +1650,16 @@ int route_stream_take(RtGeom *out)
     if (pick >= 0) { *out = S.ready[pick]; S.state[pick] = CS_TAKEN; }
     pthread_mutex_unlock(&S.mu);
     return pick >= 0;
+}
+
+void route_stream_invalidate(int index)
+{
+    if (!S.running || index < 0 || index >= RT_MAX_CHUNKS) return;
+    pthread_mutex_lock(&S.mu);
+    if (S.state[index] == CS_BUILDING) S.redo[index] = 1;
+    else { if (S.state[index] == CS_READY) route_geom_free(&S.ready[index]); S.state[index] = CS_NONE; }
+    pthread_cond_signal(&S.cv);
+    pthread_mutex_unlock(&S.mu);
 }
 
 int route_stream_wanted(int index)

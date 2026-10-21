@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DNO_SAMPLES
-SRC = src/main.c src/car.c src/tuning.c src/bench.c src/records.c src/route.c src/erecords.c
-HDR = src/car.h src/tuning.h src/vec.h src/bench.h src/records.h src/route.h src/erecords.h build/tuning_defaults.h
+SRC = src/main.c src/car.c src/tuning.c src/bench.c src/records.c src/route.c src/erecords.c src/world.c
+HDR = src/car.h src/tuning.h src/vec.h src/bench.h src/records.h src/route.h src/erecords.h src/world.h build/tuning_defaults.h
 
 # Bush Drift. NO_SAMPLES: generated sound only.
 bush-drift: $(SRC) $(HDR)

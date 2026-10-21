@@ -23,7 +23,7 @@ for abi in arm64-v8a x86_64; do
     mkdir -p $OUT/apk/lib/$abi
     $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/$tgt-linux-android29-clang -O2 -std=c99 -D_DEFAULT_SOURCE -DNO_SAMPLES -DPLATFORM_ANDROID -fPIC -shared \
         -Ibuild -Iweb/third/raylib-6.2/src -I$NDK/sources/android/native_app_glue \
-        src/main.c src/car.c src/tuning.c src/bench.c src/records.c src/route.c src/erecords.c \
+        src/main.c src/car.c src/tuning.c src/bench.c src/records.c src/route.c src/erecords.c src/world.c \
         android/lib/$abi/libraylib.a \
         -llog -landroid -lEGL -lGLESv3 -lOpenSLES -lm \
         -u ANativeActivity_onCreate -Wl,--wrap=fopen -Wl,--no-undefined -Wl,-z,max-page-size=16384 \
@@ -34,7 +34,7 @@ done
 ./scripts/fetch-data.sh
 mkdir -p $OUT/apk/assets/data/built $OUT/apk/assets/assets-built $OUT/apk/assets/assets/sfx
 cp data/built/route.csv data/built/meta.txt data/built/terrain.bin data/built/canopy.bin data/built/far.bin $OUT/apk/assets/data/built/
-cp assets-built/plants.txt assets-built/hut.txt assets-built/lc79.car $OUT/apk/assets/assets-built/
+cp assets-built/plants.txt assets-built/hut.txt assets-built/world.txt assets-built/lc79.car $OUT/apk/assets/assets-built/
 cp assets/sfx/*.ogg $OUT/apk/assets/assets/sfx/
 
 # resources and manifest, then the native library, then align and sign

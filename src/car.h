@@ -63,7 +63,8 @@ void car_step(Car *c, const CarInput *in);           /* one FIXED_DT step */
 V3 car_local_velocity(const Car *c);                 /* x right, y up, z forward, m/s */
 float car_yaw(const Car *c);                         /* radians, 0 = facing +z, towards +x positive */
 int car_selftest(void);                              /* --cartest: the targets in docs/handling-spec.md */
-/* Handling preset p (0 safer, 1 best, 2 wild): "key = value" lines of grip values to apply on top of
+#define CAR_NPRESETS 3
+/* Handling preset p (0 safer, 1 best, 2 drift): "key = value" lines of grip values to apply on top of
  * the tuning (tuning_apply_text). Sets *name if name is not NULL. NULL for an unknown p. */
 const char *car_preset(int p, const char **name);
 #endif

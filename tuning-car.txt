@@ -1,6 +1,6 @@
 # The 79's handling (src/car.c), written from scratch from docs/handling-spec.md.
 # key = value; units are SI (kg, m, s, N, Nm, rad/s) unless the name says otherwise.
-# The grip values below are the "best" preset; car_preset() in src/car.c holds safer / best / wild.
+# The grip, brake and torque values below are the "best" preset; car_preset() in src/car.c holds safer / best / drift.
 
 # --- body ---
 car_mass = 2300              # kg: kerb 2130 + tub + driver
@@ -20,11 +20,13 @@ car_rolling = 0.02          # rolling resistance coefficient (mud-terrains on gr
 car_wheel_radius = 0.45      # m: 35-inch tyres
 car_wheel_inertia = 2.5      # kg m^2 per wheel, hub and half-shaft included
 car_mu_front = 0.85              # peak friction coefficient, front tyres
-car_mu_rear = 0.88               # peak friction coefficient, rear tyres
+car_mu_rear = 0.85               # peak friction coefficient, rear tyres
 car_long_grip = 1.0          # longitudinal peak as a share of the lateral peak (friction ellipse)
 car_peak_slip_angle_deg = 8  # slip angle at the peak of the side force curve
 car_peak_slip_ratio = 0.15   # slip ratio at the peak of the drive/brake force curve
 car_tail = 0.95              # force kept when fully sliding, as a share of the peak (gravel: high)
+car_spin_side_loss = 1.0    # build A: side grip lost by a wheel spinning past its peak slip, per unit of slip past it (0 = the ellipse only): donuts
+car_spin_side_to = 8        # m/s along the wheel by which that loss has faded out (so road-speed handling is unchanged)
 car_tail_width = 4.0         # how slowly force falls past the peak, in multiples of the peak slip
 car_load_sens = 0.08         # loss of friction coefficient per unit of extra load over the static load
 car_low_speed = 3.0          # m/s: floor on the speed that slips are divided by (stops jitter when slow)
@@ -48,19 +50,20 @@ car_pedal_release_time = 0.07 # s: and out
 
 # --- brakes ---
 car_brake_nm = 9000          # Nm: all four brakes together at full pedal
-car_brake_front = 0.65       # front share of the brake torque (discs front, drums rear)
+car_brake_front = 0.60       # front share of the brake torque (build A: 0.65 -> 0.60)
 car_handbrake_nm = 9000      # Nm: both rear wheels together
 car_abs = 1                  # 1: foot brake held at the tyres' peak slip (no long lock-ups)
 car_abs_slip = 0.13          # slip ratio the foot brake is held at
+car_abs_rear_slip = 0.13     # the same for the rear wheels (build A: higher lets a brake stab slide the tail)
 car_lock_damping = 4000      # Nm per rad/s: stiffness of a brake, clutch or diff while it grips (solver)
 
 # --- engine: 2.8 turbo diesel ---
 car_idle_rpm = 750
 car_limit_rpm = 4000         # rev limiter
 car_limit_hyst_rpm = 150     # fuel comes back this far below the limiter
-car_torque_idle = 280        # Nm at idle (turbo not yet working)
-car_torque_nm = 500          # Nm: the flat peak
-car_torque_from_rpm = 1600
+car_torque_idle = 310        # Nm at idle (turbo not yet working)
+car_torque_nm = 550          # Nm: the flat peak (build A: 500 -> 550)
+car_torque_from_rpm = 1500
 car_torque_to_rpm = 2800
 car_power_kw = 150           # peak power
 car_power_rpm = 3000
