@@ -48,3 +48,5 @@ ios/build/
 ios/BushDrift.xcodeproj/
 ios/Info.plist
 ios/out/
+ios/team.local
+.DS_Store

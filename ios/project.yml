@@ -7,7 +7,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    DEVELOPMENT_TEAM: ""            # Xcode → Signing & Capabilities → Team: your Personal Team
+    DEVELOPMENT_TEAM: "${BD_IOS_TEAM}"   # your team ID, from ios/team.local (see ios/README.md)
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1"     # iPhone
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -103,3 +103,18 @@ targets:
           for f in plants.txt hut.txt lc79.car; do cp "$R/assets-built/$f" "$D/assets-built/"; done
           cp "$R"/assets/sfx/*.ogg "$D/assets/sfx/"
         basedOnDependencyAnalysis: false
+schemes:
+  BushDrift:
+    build:
+      targets:
+        BushDrift: all
+    run:
+      config: Debug
+  BushDrift Bench:   # the road bot drives 7,200 frames (2 minutes at 60 fps); frame times go to the console log
+    build:
+      targets:
+        BushDrift: all
+    run:
+      config: Release
+      commandLineArguments:
+        "--bench 7200 --bot 6": true
