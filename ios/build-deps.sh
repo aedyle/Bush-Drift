@@ -1,6 +1,6 @@
 #!/bin/sh
 # Bush Drift for iOS: fetches raylib 6.2 and SDL 3.4.18 into ios/third/ and builds SDL3 as a static
-# xcframework (iPhone + Simulator, arm64) in ios/lib/. Run once on the Mac, then ./ios/gen-project.sh.
+# xcframework (iPhone + Simulator, arm64) in ios/lib/, and fetches the game files if missing. Run once on the Mac, then ./ios/gen-project.sh.
 # Needs Xcode and cmake (brew install cmake).
 set -e
 cd "$(dirname "$0")"
@@ -33,4 +33,5 @@ if [ ! -d lib/SDL3.xcframework ]; then
         -library third/sdl-install-iphonesimulator/lib/libSDL3.a -headers third/sdl-install-iphonesimulator/include \
         -output lib/SDL3.xcframework >/dev/null
 fi
+../scripts/fetch-data.sh
 echo "ios deps ready: third/raylib-$RAYLIB, lib/SDL3.xcframework"

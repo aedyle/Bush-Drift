@@ -30,7 +30,8 @@ for abi in arm64-v8a x86_64; do
         -o $OUT/apk/lib/$abi/libmain.so
 done
 
-# the game's files, at the same relative paths the game opens
+# the game's files, at the same relative paths the game opens (downloaded if missing)
+./scripts/fetch-data.sh
 mkdir -p $OUT/apk/assets/data/built $OUT/apk/assets/assets-built $OUT/apk/assets/assets/sfx
 cp data/built/route.csv data/built/meta.txt data/built/terrain.bin data/built/canopy.bin data/built/far.bin $OUT/apk/assets/data/built/
 cp assets-built/plants.txt assets-built/hut.txt assets-built/lc79.car $OUT/apk/assets/assets-built/
