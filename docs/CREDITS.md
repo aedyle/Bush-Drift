@@ -70,5 +70,15 @@ here it is. The loops are cut, levelled and made seamless by `tools/make_sfx.py`
 | `gravel_slide.ogg` | Truck Pulling Away On Gravel Then Doing Donuts, https://freesound.org/s/725428/ | mwchristian95 |
 | `bush.ogg` | Birdsong In Northern NSW Hinterland (Mebbin), https://freesound.org/s/812609/ | Alex_hears_things |
 | `kookaburra.ogg` | Kookaburras in the Victorian Bush, https://freesound.org/s/427327/ | Sassaby |
+| `rocket_whistle.ogg` | rocket-whistle.wav, https://freesound.org/s/186933/ (CC0, checked 22 Oct 2026; trimmed to 1.32 s, mono) | ReadeOnly |
 
 The score and gear-change notes are generated in code.
+
+## Music
+
+| file | song | by |
+|---|---|---|
+| `assets/music/the-late-cake.ogg` | The Late Cake (a song in Explore) | willfarrell85, made with Suno |
+
+Used with the permission of its owner, who holds commercial rights to it (a Suno premium subscription); it is not
+covered by this repository's licence and may not be reused without his permission.

@@ -101,9 +101,10 @@ targets:
           R="$SRCROOT/.."
           D="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
           mkdir -p "$D/data/built" "$D/assets-built" "$D/assets/sfx"
-          for f in route.csv meta.txt terrain.bin canopy.bin far.bin; do cp "$R/data/built/$f" "$D/data/built/"; done
+          for f in route.csv meta.txt terrain.bin canopy.bin far.bin creek.csv creek_dem.bin; do cp "$R/data/built/$f" "$D/data/built/"; done
           for f in plants.txt hut.txt world.txt lc79.car; do cp "$R/assets-built/$f" "$D/assets-built/"; done
           cp "$R"/assets/sfx/*.ogg "$D/assets/sfx/"
+          mkdir -p "$D/assets/music" && cp "$R"/assets/music/*.ogg "$D/assets/music/"
         basedOnDependencyAnalysis: false
 schemes:
   BushDrift:

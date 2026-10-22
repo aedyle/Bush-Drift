@@ -127,8 +127,23 @@ offroad_from = 1.0     # the car's middle this far past the ditch's outer edge (
 checkpoint_every = 250 # checkpoints along the road (m), passed in order; the bridge needs all of them
 offroad_reset = 15     # seconds off the road (the car park aside) before the ute is put back on the track
 score_bank_button = 0  # 1 = the bank button (B, Right Shift, L2, BANK on phones) works again; 0 = pots bank when you leave the road
+bollard_gap = 2.36     # build C: bollards beside the track stand this far apart, face to face (m): the ute at its mirrors is 2.05 m, so 31 cm to spare
 log_keep = 0.8         # running over a log keeps this share of the speed; the log splinters into firewood
-wood_full = 15         # logs to fill the tray (the GONE WOODIN' achievement)
+wood_full = 15         # logs to fill the tray (the GONE WOODIN' achievement); a load for the fire in Explorer
+# build C, Explorer (21 Oct): free roaming, no score. Its logs don't come back (only with a new day). Play test (22 Oct):
+# plenty, easy to see: one in each wood_every metres of road, near it; wood_bridge more near the bridge; any in the hut's
+# clearing; and some down the creek way. Drift keeps every log.
+wood_every = 60
+wood_bridge = 12
+fire_e = -9.4          # the campfire, metres east and north of the hut: 5 m off the chimney gable (the WNW end), on the grass
+fire_n = 4.0
+fw_whistle = 0.6       # a rocket's whistle going up (assets/sfx/rocket_whistle.ogg; 0 off), louder the nearer
+fw_finale = 1.3        # the fireworks' and the fire's sounds in the finale, over their usual level (the song stays the main thing)
+hut_reach = 20         # play test (22 Oct): drive within this of the hut (m, no need to stop) with a full tray and the wood goes
+                       # on the fire; with all twelve and the board is laid out; with a deer and the stew goes on
+night_lights = 1       # the fire's and the ute's light on the ground at night (0: off, for slow phones; the flames and lamps still glow)
+find_glow = 1          # the things to collect (the hamper, the rifle) glow so they read as pick-ups (0: off, for the purist)
+fx_density = 1.0       # flames, sparks and fireworks: a multiplier (0.5 for slow phones)
 # the deer (build B, 21 Oct): 20 sambar in the bush, found by driving into one
 deer_seed = 1          # where they stand: the same spots every run for the same seed
 deer_random = 0        # 1 = new spots every run (the found-so-far count then only means this run)
@@ -145,3 +160,49 @@ donut_carpark = 0      # 1 = donuts in the car park score too (0: practice there
 yodel_time = 60        # seconds (the song is 60.2 s)
 yodel_score = 2        # pot points and donut bonuses are multiplied by this while it's on
 yodel_duck = 0.4       # everything else (engine, gravel, bush, notes) is turned down to this while the song plays (-8 dB)
+
+# --- build D: Low Range, the harder creek, the dead trees ---
+low_max_kmh = 12       # Low Range goes in (and out) only below this speed, like the real transfer case wanting the 79 nearly stopped
+creek_bench_h = 1.5    # the creek way's climb-outs: the benches round the log jams and fallen trees, and the waterfall's step, rise this high (m)
+creek_ramp = 2.8       # over this many metres (steep and rocky: Low Range)
+creek_rock_h = 0.6     # the rock gardens' rocks stand up to this high (m)
+creek_wall_from = 14   # the thicket round the way in starts this far before it (m along the creek)
+creek_scrub = 0.30     # chance of scrub per draw on the creek way's banks (denser: drive-through but tight)
+rock_drag = 0.15       # 1/s, all four wheels on rocks (pro rata per wheel): no carrying speed over a rock garden
+rock_decel = 0.1       # m/s2 more, all four wheels on rocks
+marker_reach = 8       # the old stock route's markers count when the ute's middle passes this close (m)
+camp_reach = 14        # the cattleman's camp: reached this close to its fireplace (m)
+stag_speed = 5.6       # m/s (20 km/h): a dead standing gum hit this fast or faster topples and lies as three firewood logs; slower, a thud
+stag_keep = 0.6        # the ute keeps this share of its speed when one gives way
+# the sprung body (build D): 1 = the ute rides on four springs over the ground, wheel by wheel (bumps, jumps, grounding out,
+# rollovers); 0 = the old flat ride (Drift exactly as before build D). Both modes.
+body_physics = 1
+susp_k = 52000         # N/m a wheel (about 1.5 Hz)
+susp_c = 4200          # N s/m a wheel
+body_pitch_i = 6000    # kg m^2
+body_roll_i = 1600     # kg m^2
+belly_h = 0.33         # m: the belly under the body's origin (0.42 m of clearance between the axles at rest: a 79 on 35s)
+bumper_h = 0.20        # m: the bumpers under it (0.55 m: the approach and departure)
+belly_k = 400000       # N/m: the belly on the ground
+belly_mu = 0.6         # its friction when grounded
+grip_light = 0.4       # a wheel's grip fades only below this share of its resting load (0 in the air)
+knock_max = 3.5        # m/s: the most upward speed a wheel at full travel can hand the body in one knock (the launch)
+roll_over = 1.0        # rad (57 degrees) of roll or pitch: over it goes
+fall_ledge = 0         # part 2: 1 = the ledge round the waterfall (Build D); 0 = none, you drive down the waterfall's chute
+fall_step_h = 0        # part 2: a rocky step up onto the waterfall's ledge (m); 0 = none
+creek_stones = 2.4     # build D part 2: stones a metre down the creek way, on average (thicker and thinner in stretches)
+moss_scale = 0.5       # the mossy fallen trees across the creek, as a share of the fallen-tree model (0.7: about 0.7 m high at the butt)
+wet_smash = 5.6        # m/s (20 km/h): a wet log hit this fast smashes; slower, the ute shoves it
+saw_on = 1             # build E: Will's chainsaw in Explorer (a cut meter on each log, the saw wears and is sharpened at the hut); 0 = logs split on any hit
+saw_wear = 2.5         # % of sharpness a pass over a log costs (a sharp start lasts about 25 logs) (more in creek gravel, at speed; half after a razor sharpening)
+saw_razor_q = 0.8      # sharpening: the share of a perfect filing that counts as razor sharp (0.45 or more is good, less is rough)
+trials_on = 1          # build E: Creek Trials (a score for clean lines over the creek's obstacles), trial gates and damage, Explorer only
+trials_knock = 2.0     # m/s into the bump stop that counts as a knock (loses the pot, damages that corner); a gentle crawl stays under 1
+trials_land = 4.0      # m/s down at a landing that counts as a hard one
+trials_slow = 10       # km/h: over an obstacle at this or slower (or in Low Range) counts as a clean line
+gates_n = 10           # trial gates down the creek way, placed fresh each day
+dmg_tyre = 0.12        # tyre wear per m/s of a knock past 1.5 (1 = a puncture)
+dmg_body = 0.05        # body damage per m/s of a knock past 1.5
+flat_grip = 0.45       # a flat tyre's grip (share of a good one's)
+flat_drag = 0.5        # m/s2 of drag from a flat
+flat_pull = 0.06       # rad/s of yaw a flat pulls at 10 m/s (towards its side)

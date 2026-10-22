@@ -90,3 +90,13 @@ car_shift_down_rpm = 1600
 car_shift_time = 0.12         # s with the drive cut
 car_diff_lock_nm = 300       # Nm the rear diff can pass between the wheels (0 = open)
 car_substeps = 8             # solver steps per 0.02 s step
+
+# --- build D: Low Range, the 79's part-time 4WD in low (Explorer only; Drift never sets it) ---
+# The 79's HF1A transfer case: 1.000 high, 2.488 low; part-time 4WD (2H / 4H / 4L); a rear diff lock (front and rear
+# lockers on the current 79). Low here = 4L: all four wheels driven, the gearing times 2.488, the rear diff locked.
+car_low_ratio = 2.488          # transfer case low range
+car_low_gears = 3              # the automatic holds 1st..3rd in low: 3rd tops out about 38 km/h at the limiter
+car_low_rear_lock = 6000       # Nm the rear diff passes in low (a locker; 0 = as in high)
+car_low_transfer_nm = 20000    # Nm the transfer case passes between the front and rear axles (locked: part-time 4WD)
+car_low_pedal_time = 0.45      # s: throttle ramps in this slowly in low (gentle)
+car_low_throttle_curve = 1.8   # pedal to throttle: travel ^ this in low (fine control at a crawl)

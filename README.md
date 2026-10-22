@@ -3,7 +3,7 @@
 A small drifting game on a real dirt road: 7.8 km from Alexanders Hut in the South East Forest National Park
 (NSW) down Robinsons Track and Cattlemens Track to the Tantawangalo Creek bridge, in a LandCruiser 79 ute.
 Gravel, ditches, tall wet forest either side, real hills from the NSW elevation model, and a pixel-art look.
-Hit a tree or a post and the run is over.
+Hit a tree or a post and the run is over. Or pick Explore on the title and roam with no score.
 
 **Play in the browser:** https://aedyle.github.io/Bush-Drift/ (a play-test build; keyboard).
 **Android:** https://github.com/aedyle/Bush-Drift/releases/latest/download/bush-drift.apk (Android 10 or newer;
@@ -18,6 +18,8 @@ install steps in the [latest release](https://github.com/aedyle/Bush-Drift/relea
 | steer | ← → |
 | accelerate / brake | ↑ / ↓ |
 | handbrake | Space |
+| Low Range (Explore only) | L |
+| pause menu | Esc |
 | restart / handling preset / pixel size | R / H / P |
 | small map while driving (on / off) | M |
 | readout | F1 |
@@ -36,14 +38,23 @@ tray. The run ends at the bridge, at a tree or post, or after driving the wrong 
 Donuts: a full turn on the spot (full lock and throttle from a standstill, tail out) is worth 500 points straight
 onto the score when it's on the road. The car park is for practising them (no points there).
 
-## Exploring
+## Drift and Explore
 
-Leaving the road is allowed: it says OFF-ROAD (nothing scores out there) and counts down from 15 seconds, then
-puts you back on the track. A bank and thick scrub mark the edge of the bush you can drive in; round the hut the
-whole clearing is open. Checkpoints along the road make sure the bridge only counts if you drove the road.
+The title menu has two ways to play. **Drift** is the scored run to the bridge described above. Leaving the road is
+allowed there: it says OFF-ROAD (nothing scores out there) and counts down from 15 seconds, then puts you back on
+the track. A bank and thick scrub mark the edge of the bush you can drive in; round the hut the whole clearing is
+open. Checkpoints along the road make sure the bridge only counts if you drove the road.
+
+**Explore** has no score and no clock: drive the road both ways, or off it. Trees stop you rather than ending
+anything. There's firewood to split (hit logs at 15 to 35 km/h; the chainsaw blunts and is sharpened at the hut),
+a full tray to bring back to the hut, and the makings of a charcuterie board hidden round the hut's clearing.
+Low Range (L, or LOW on a phone) is the 79's 4WD low for steep, rough ground. Hard knocks and big landings
+damage the ute; a flat is changed from the pause menu, and the hut fixes everything. The pause menu (Esc) also
+has the map, back to the hut and a new day.
 
 Twenty deer are hidden in the bush, in the same places every run; drive into one to find it. Finds are kept on the
-device, with the achievements (title menu → Achievements). Some achievements are hidden until you earn them.
+device, with the achievements (title menu → Achievements): grouped in sections, with filters, progress bars and a
+clue for each hidden one. Track up to three and they show while you drive.
 
 Handling presets (H): safer, best (the default) and drift, which has less grip at the rear, rear-biased brakes and
 more low-down torque, so a push of throttle swings the tail out.
@@ -93,5 +104,5 @@ and `BOT_KICK=…` are the other scripted drives; `BOT_EVENTS=1` prints what hap
 
 See `docs/CREDITS.md`. In short: road line © OpenStreetMap contributors (ODbL); elevation and tree cover
 from NSW DEM and imagery © State of NSW (Spatial Services) (CC BY 4.0; no imagery pixels are included); the ute from "Toyota Land Cruiser J79 Pickup Off- Road" by DR1KING100K
-(CC BY 4.0); built with raylib (zlib licence). Bush Drift grew out of an earlier private drifting project;
+(CC BY 4.0); the song "The Late Cake" by willfarrell85; built with raylib (zlib licence). Bush Drift grew out of an earlier private drifting project;
 nothing from any other game is in this repository.

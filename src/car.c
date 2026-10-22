@@ -127,6 +127,17 @@ static int count_gears(void)
     return n < 1 ? 1 : n;
 }
 
+/* build D: Low Range. The overall ratio as driven (times car_low_ratio in low), and the gears the automatic uses in low.
+ * In high these are exactly gear_ratio and ngears, so Drift's handling is untouched. */
+static float drive_ratio(const Car *c, int g) { return c->low ? gear_ratio(g) * T.car_low_ratio : gear_ratio(g); }
+static int drive_gears(const Car *c, int n)
+{
+    if (!c->low || T.car_low_gears < 1) return n;
+    int m = (int)T.car_low_gears;
+    return m < n ? m : n;
+}
+float car_overall_ratio(const Car *c) { return c->changing_gear ? 0 : c->ratio; }
+
 /* share of the full steering lock allowed at a forward speed */
 static float lock_frac(float v)
 {
@@ -211,31 +222,31 @@ static TyreOut tyre(float vx, float vy, float w, float n, float mu)
 /* A coupling that resists a speed difference s = u.w - s0 with torque k*s, kept within [lo, hi]:
  * a clutch, a brake or the diff. While inside its limits it behaves as a stiff damper (it grips);
  * at a limit it passes a fixed torque (it slips). */
-typedef struct { float u[3], s0, lo, hi; int mode; } Link;
+typedef struct { float u[5], s0, lo, hi; int mode; } Link;   /* build D: 5 speeds (the engine and four wheels in Low Range) */
 
-/* Solve (M - h J) w' = M w + h (tau - J w) plus the links, for n <= 3 speeds. */
+/* Solve (M - h J) w' = M w + h (tau - J w) plus the links, for n <= 5 speeds (column 5 holds the right-hand side). */
 static void solve_speeds(int n, const float *m, const float *jd, const float *tau, float *w,
                          Link *lk, int nl, float h, float k)
 {
-    float x[3] = { 0, 0, 0 };
+    float x[5] = { 0, 0, 0, 0, 0 };
     for (int i = 0; i < nl; i++) lk[i].mode = 0;
     for (int iter = 0; iter < 4; iter++) {
-        float a[3][4];
+        float a[5][6];
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) a[i][j] = 0;
             a[i][i] = m[i] - h * jd[i];
-            a[i][3] = m[i] * w[i] + h * (tau[i] - jd[i] * w[i]);
+            a[i][5] = m[i] * w[i] + h * (tau[i] - jd[i] * w[i]);
         }
         for (int l = 0; l < nl; l++) {
             const float *u = lk[l].u;
             if (lk[l].mode == 0) {
                 for (int i = 0; i < n; i++) {
                     for (int j = 0; j < n; j++) a[i][j] += h * k * u[i] * u[j];
-                    a[i][3] += h * k * lk[l].s0 * u[i];
+                    a[i][5] += h * k * lk[l].s0 * u[i];
                 }
             } else {
                 float t = lk[l].mode > 0 ? lk[l].hi : lk[l].lo;
-                for (int i = 0; i < n; i++) a[i][3] -= h * t * u[i];
+                for (int i = 0; i < n; i++) a[i][5] -= h * t * u[i];
             }
         }
         /* Gaussian elimination with partial pivoting */
@@ -244,15 +255,16 @@ static void solve_speeds(int n, const float *m, const float *jd, const float *ta
             for (int r = c + 1; r < n; r++)
                 if (fabsf(a[r][c]) > fabsf(a[piv][c])) piv = r;
             if (piv != c)
-                for (int j = 0; j < 4; j++) { float t = a[c][j]; a[c][j] = a[piv][j]; a[piv][j] = t; }
+                for (int j = 0; j < 6; j++) { if (j >= n && j < 5) continue; float t = a[c][j]; a[c][j] = a[piv][j]; a[piv][j] = t; }
             if (fabsf(a[c][c]) < 1e-9f) a[c][c] = 1e-9f;
             for (int r = c + 1; r < n; r++) {
                 float f = a[r][c] / a[c][c];
-                for (int j = c; j < 4; j++) a[r][j] -= f * a[c][j];
+                for (int j = c; j < n; j++) a[r][j] -= f * a[c][j];
+                a[r][5] -= f * a[c][5];
             }
         }
         for (int i = n - 1; i >= 0; i--) {
-            float s = a[i][3];
+            float s = a[i][5];
             for (int j = i + 1; j < n; j++) s -= a[i][j] * x[j];
             x[i] = s / a[i][i];
         }
@@ -328,10 +340,10 @@ void car_setup(Car *c, const V3 wheel_anchor[4])
         }
         c->wheel[i].on_ground = 1;
     }
-    c->ngears = count_gears();
+    c->ngears = drive_gears(c, count_gears());
     if (c->gear > c->ngears) c->gear = c->ngears;
     c->max_steer = T.car_max_steer_deg * DEG2RADF;
-    if (!c->changing_gear) c->ratio = gear_ratio(c->gear);
+    if (!c->changing_gear) c->ratio = drive_ratio(c, c->gear);
     /* the shared gear table: reverse, neutral, then the forward gears */
     T.gears[0] = T.car_gear_r;
     T.gears[1] = 0;
@@ -351,12 +363,12 @@ void car_reset(Car *c, V3 pos, float yaw_rad)
     c->steering = c->steer_angle = 0;
     c->throttle = c->brake = c->handbrake = 0;
     c->velo = c->slide_deg = c->slide = 0;
-    c->ngears = count_gears();
+    c->ngears = drive_gears(c, count_gears());
     c->gear = 1;
     c->neutral = 0;
     c->changing_gear = 0;
     c->shift_timer = 0;
-    c->ratio = gear_ratio(1);
+    c->ratio = drive_ratio(c, 1);
     c->engine_ang_vel = T.car_idle_rpm / RPM_PER_RADS;
     c->rpm = T.car_idle_rpm;
     c->clutch_position = 1;
@@ -371,6 +383,7 @@ void car_reset(Car *c, V3 pos, float yaw_rad)
         w->load = n0;
         w->slip_angle = w->slip_ratio = w->slip_velo = 0;
         w->on_ground = 1;
+        w->grip_lost = 0;
     }
     fill_wheels(c);
 }
@@ -403,6 +416,25 @@ static void start_shift(Car *c, int g)
     }
     c->changing_gear = 1;
     c->shift_timer = T.car_shift_time;
+}
+
+void car_set_low(Car *c, int on)
+{
+    on = on ? 1 : 0;
+    if (c->low == on) return;
+    c->low = on;
+    c->ngears = drive_gears(c, count_gears());
+    if (c->gear > c->ngears) c->gear = c->ngears;
+    if (c->gear >= 1) {   /* the gear that suits the road speed in the new range, then a shift's pause while the transfer case moves */
+        float vf = car_local_velocity(c).z;
+        int best = 1;
+        for (int g = 1; g <= c->ngears; g++) if (fabsf(vf) / T.car_wheel_radius * drive_ratio(c, g) * RPM_PER_RADS > T.car_shift_down_rpm) best = g;
+        c->gear = best;
+    }
+    c->changing_gear = c->gear != 0;
+    c->neutral = 1;
+    c->ratio = 0;
+    c->shift_timer = 2.0f * T.car_shift_time;
 }
 
 static void sanitise(Car *c)
@@ -438,7 +470,7 @@ void car_step(Car *c, const CarInput *inp)
     V3 fwd = dir_fwd(yaw), right = dir_right(yaw);
     float vf = vdot(c->body.vel, fwd), vl = vdot(c->body.vel, right);
     int manual = T.manual_gears > 0.5f;
-    c->ngears = count_gears();
+    c->ngears = drive_gears(c, count_gears());
 
     /* ---- rev limiter: fuel cut above the limit until the revs fall back */
     {
@@ -454,7 +486,7 @@ void car_step(Car *c, const CarInput *inp)
             c->changing_gear = 0;
             c->shift_timer = 0;
             c->neutral = c->gear == 0;
-            c->ratio = gear_ratio(c->gear);
+            c->ratio = drive_ratio(c, c->gear);
         }
     } else if (manual) {
         if (in.shift > 0 && c->gear < c->ngears) start_shift(c, c->gear + 1);
@@ -468,13 +500,13 @@ void car_step(Car *c, const CarInput *inp)
         else if (c->gear >= 1) {
             /* shift on road speed (as an automatic's output shaft sees it), so wheelspin does not
              * make it hunt; the limiter also forces an upshift if the next gear would pull */
-            float rpm_road = fabsf(vf / r * gear_ratio(c->gear)) * RPM_PER_RADS;
-            float rpm_next = c->gear < c->ngears ? rpm_road * gear_ratio(c->gear + 1) / gear_ratio(c->gear) : 0;
+            float rpm_road = fabsf(vf / r * drive_ratio(c, c->gear)) * RPM_PER_RADS;
+            float rpm_next = c->gear < c->ngears ? rpm_road * drive_ratio(c, c->gear + 1) / drive_ratio(c, c->gear) : 0;
             if (c->gear < c->ngears && (rpm_road > T.car_shift_up_rpm ||
                 (c->rev_limiter_triggered && rpm_next > T.car_shift_down_rpm + 200.0f)))
                 start_shift(c, c->gear + 1);
             else if (c->gear > 1 && rpm_road < T.car_shift_down_rpm &&
-                     rpm_road * gear_ratio(c->gear - 1) / gear_ratio(c->gear) < T.car_shift_up_rpm - 400.0f)
+                     rpm_road * drive_ratio(c, c->gear - 1) / drive_ratio(c, c->gear) < T.car_shift_up_rpm - 400.0f)
                 start_shift(c, c->gear - 1);
         }
     }
@@ -483,6 +515,11 @@ void car_step(Car *c, const CarInput *inp)
     float thr_t = in.throttle, brk_t = in.brake;
     if (!manual && c->gear == -1) { thr_t = in.brake; brk_t = in.throttle; }
     float up = dt / maxf(T.car_pedal_time, 0.001f), down = dt / maxf(T.car_pedal_release_time, 0.001f);
+    if (c->low) {   /* build D: Low Range takes the throttle gently: a progressive pedal, ramping in slowly */
+        thr_t = powf(thr_t, maxf(T.car_low_throttle_curve, 1.0f));
+        float up_low = dt / maxf(T.car_low_pedal_time, 0.001f);
+        c->throttle = approach(c->throttle, thr_t, up_low, down);
+    } else
     c->throttle = approach(c->throttle, thr_t, up, down);
     c->brake = approach(c->brake, brk_t, up, down);
     c->handbrake = approach(c->handbrake, in.handbrake, up, down);
@@ -507,12 +544,13 @@ void car_step(Car *c, const CarInput *inp)
     /* ---- clutch: an automatic bite by engine speed (it cannot stall), times the pedal */
     float rpm0 = c->engine_ang_vel * RPM_PER_RADS;
     float bite = smooth01((rpm0 - T.car_clutch_bite_rpm) / maxf(T.car_clutch_full_rpm - T.car_clutch_bite_rpm, 1.0f));
+    if (c->low && !manual) bite = smooth01((rpm0 - (T.car_idle_rpm - 120.0f)) / 300.0f);   /* build D: in low the automatic creeps at idle (a crawl) */
     float engage = (c->changing_gear || c->gear == 0) ? 0 : bite * (1.0f - in.clutch);
     c->clutch_position = 1.0f - engage;
     float clutch_cap = T.car_clutch_nm * engage;
     float G = c->changing_gear ? 0 : c->ratio;
     /* during a shift the engine is blipped to the speed the new gear will want */
-    float match_ratio = c->changing_gear ? gear_ratio(c->gear) : 0;
+    float match_ratio = c->changing_gear ? drive_ratio(c, c->gear) : 0;
 
     /* ---- static loads */
     float m = maxf(T.car_mass, 1.0f), grav = T.car_gravity;
@@ -562,6 +600,7 @@ void car_step(Car *c, const CarInput *inp)
             vy[i] = vdot(vp, wrt[i]);
             float base = i < 2 ? T.car_mu_front : T.car_mu_rear;
             mu[i] = base * maxf(1.0f - T.car_load_sens * (load[i] / n_static - 1.0f), 0.3f);
+            if (w->grip_lost != 0.0f) mu[i] *= 1.0f - w->grip_lost;   /* build D: the sprung body's say (0 = no change at all) */
             /* tyre torque on the wheel and its slope against wheel speed (kept stabilising only) */
             TyreOut t0 = tyre(vx[i], vy[i], w->ang_vel, load[i], mu[i]);
             TyreOut t1 = tyre(vx[i], vy[i], w->ang_vel + 0.05f, load[i], mu[i]);
@@ -570,8 +609,8 @@ void car_step(Car *c, const CarInput *inp)
             tau[i] = -t0.fx * r - roll;
         }
 
-        /* front wheels: brakes only */
-        for (int i = 0; i < 2; i++) {
+        /* front wheels: brakes only (in Low Range they're driven: solved with the engine below) */
+        for (int i = 0; i < 2 && !c->low; i++) {
             Link lk;
             int nl = brake_link(&lk, 0, cap_fb[i], vx[i], abs_on, T.car_abs_slip);
             float mm = iw, w1 = c->wheel[i].ang_vel;
@@ -580,7 +619,7 @@ void car_step(Car *c, const CarInput *inp)
         }
 
         /* engine and rear wheels together: clutch, diff, brakes */
-        {
+        if (!c->low) {
             float rpm = c->engine_ang_vel * RPM_PER_RADS;
             float th = c->changing_gear ? 0 : c->throttle;
             if (match_ratio != 0) {
@@ -617,6 +656,56 @@ void car_step(Car *c, const CarInput *inp)
             c->engine_ang_vel = clampf(ww[0], 0, 1.6f * T.car_limit_rpm / RPM_PER_RADS);
             c->wheel[RL].ang_vel = ww[1];
             c->wheel[RR].ang_vel = ww[2];
+        }
+        else {   /* build D, Low Range (4L): the engine and all four wheels. The clutch drives the rear axle as in high; the
+                  * transfer case locks the front axle's mean speed to the rear's (part-time 4WD, no centre diff); the rear diff is
+                  * locked (car_low_rear_lock); the front diff stays open. Brakes on all four. Speeds: engine, RL, RR, FL, FR. */
+            float rpm = c->engine_ang_vel * RPM_PER_RADS;
+            float th = c->changing_gear ? 0 : c->throttle;
+            if (match_ratio != 0) {
+                float want = fabsf(0.5f * (c->wheel[RL].ang_vel + c->wheel[RR].ang_vel) * match_ratio) * RPM_PER_RADS;
+                if (want > T.car_idle_rpm) th = clamp01(hold_throttle(want) + (want - rpm) * T.car_idle_gain * 2.0f);
+            }
+            if (c->rev_limiter_triggered) th = 0;
+            float gov = clamp01(hold_throttle(T.car_idle_rpm) + (T.car_idle_rpm - rpm) * T.car_idle_gain);
+            th = maxf(th, gov);
+
+            float mm[5] = { ie, iw, iw, iw, iw };
+            float jj[5] = { 0, jd[RL], jd[RR], jd[FL], jd[FR] };
+            float tt[5] = { engine_torque(rpm, th), tau[RL], tau[RR], tau[FL], tau[FR] };
+            float ww[5] = { c->engine_ang_vel, c->wheel[RL].ang_vel, c->wheel[RR].ang_vel, c->wheel[FL].ang_vel, c->wheel[FR].ang_vel };
+            Link lk[8];
+            int nl = 0;
+            if (clutch_cap > 1e-3f && G != 0) {
+                memset(&lk[nl], 0, sizeof(Link));
+                lk[nl].u[0] = 1; lk[nl].u[1] = -0.5f * G; lk[nl].u[2] = -0.5f * G;
+                lk[nl].lo = -clutch_cap; lk[nl].hi = clutch_cap;
+                nl++;
+            }
+            if (T.car_low_transfer_nm > 1e-3f) {   /* front axle with the rear */
+                memset(&lk[nl], 0, sizeof(Link));
+                lk[nl].u[1] = -0.5f; lk[nl].u[2] = -0.5f; lk[nl].u[3] = 0.5f; lk[nl].u[4] = 0.5f;
+                lk[nl].lo = -T.car_low_transfer_nm; lk[nl].hi = T.car_low_transfer_nm;
+                nl++;
+            }
+            float dl = T.car_low_rear_lock > 1e-3f ? T.car_low_rear_lock : T.car_diff_lock_nm;
+            if (dl > 1e-3f) {
+                memset(&lk[nl], 0, sizeof(Link));
+                lk[nl].u[1] = 1; lk[nl].u[2] = -1;
+                lk[nl].lo = -dl; lk[nl].hi = dl;
+                nl++;
+            }
+            for (int i = RL; i <= RR; i++) {
+                if (cap_hb > 1e-3f) nl += brake_link(&lk[nl], i - RL + 1, cap_hb + cap_fb[i], vx[i], 0, 0);
+                else nl += brake_link(&lk[nl], i - RL + 1, cap_fb[i], vx[i], abs_on, T.car_abs_rear_slip);
+            }
+            for (int i = FL; i <= FR; i++) nl += brake_link(&lk[nl], i + 3, cap_fb[i], vx[i], abs_on, T.car_abs_slip);
+            solve_speeds(5, mm, jj, tt, ww, lk, nl, h, kl);
+            c->engine_ang_vel = clampf(ww[0], 0, 1.6f * T.car_limit_rpm / RPM_PER_RADS);
+            c->wheel[RL].ang_vel = ww[1];
+            c->wheel[RR].ang_vel = ww[2];
+            c->wheel[FL].ang_vel = ww[3];
+            c->wheel[FR].ang_vel = ww[4];
         }
 
         /* tyre forces at the new wheel speeds move the body */
@@ -1032,6 +1121,51 @@ static int random_run(void)
     return bad;
 }
 
+/* Build D: Low Range checks on flat gravel and on a slope (the slope's pull applied as the game does, along the ground).
+ * climb_from_rest: rolling at walking pace onto a grade (rise/run), throttle flat (in.throttle = thr): the speed after 12 s, m/s (0 or
+ * less = it can't). top_low: flat out in low for 40 s, km/h. creep: no pedals in low 1st, km/h after 15 s. */
+static float climb_from_rest(int low, float grade, float thr)
+{
+    Car c; new_car(&c);
+    car_set_low(&c, low);
+    c.shift_timer = 0; c.changing_gear = 0; c.ratio = drive_ratio(&c, c.gear); c.neutral = 0;
+    {   /* rolling up it at walking pace (5 km/h) in first, as when a climb starts */
+        float v0 = 1.4f;
+        c.body.vel = vscale(dir_fwd(car_yaw(&c)), v0);
+        for (int i = 0; i < 4; i++) c.wheel[i].ang_vel = v0 / T.car_wheel_radius;
+        c.engine_ang_vel = maxf(v0 / T.car_wheel_radius * c.ratio, T.car_idle_rpm / RPM_PER_RADS);
+        c.throttle = thr;
+    }
+    CarInput in = { 0 }; in.throttle = thr;
+    float a = 9.81f * grade / sqrtf(1.0f + grade * grade);
+    for (int i = 0; i < 12 * 50; i++) {
+        car_step(&c, &in);
+        V3 f = dir_fwd(car_yaw(&c));
+        c.body.vel = vsub(c.body.vel, vscale(f, a * FIXED_DT));
+        if (getenv("CARTEST_TRACE") && i % 25 == 0) printf("  low %d grade %.2f t %.1f v %.2f rpm %.0f gear %d chg %d clutch %.2f thr %.2f w %.1f %.1f %.1f %.1f sx %.2f %.2f %.2f %.2f\n", low, grade, i * FIXED_DT, fwd_speed(&c), c.rpm, c.gear, c.changing_gear, c.clutch_position, c.throttle, c.wheel[0].ang_vel, c.wheel[1].ang_vel, c.wheel[2].ang_vel, c.wheel[3].ang_vel, c.wheel[0].slip_ratio, c.wheel[1].slip_ratio, c.wheel[2].slip_ratio, c.wheel[3].slip_ratio);
+        if (fwd_speed(&c) < -0.2f) return fwd_speed(&c);   /* rolling back */
+    }
+    return fwd_speed(&c);
+}
+static float steepest_climb(int low)
+{
+    if (getenv("CARTEST_TRACE")) { climb_from_rest(low, (float)atof(getenv("CARTEST_TRACE")), 1.0f); return 0; }
+    float lo = 0.05f, hi = 0.6f;   /* the game caps the ground's slope at 60% (rt_physics) */
+    for (int k = 0; k < 18; k++) { float m = 0.5f * (lo + hi); if (climb_from_rest(low, m, 1.0f) > 0.5f) lo = m; else hi = m; }
+    return lo;
+}
+static void low_checks(float *top, float *creep, float *crawl_rpm, float *g_hi, float *g_lo)
+{
+    Car c; new_car(&c); car_set_low(&c, 1);
+    CarInput in = { 0 }; in.throttle = 1;
+    for (int i = 0; i < 40 * 50; i++) car_step(&c, &in);
+    *top = fwd_speed(&c) * 3.6f;
+    new_car(&c); car_set_low(&c, 1); memset(&in, 0, sizeof(in));
+    for (int i = 0; i < 15 * 50; i++) car_step(&c, &in);
+    *creep = fwd_speed(&c) * 3.6f; *crawl_rpm = c.rpm;
+    *g_hi = steepest_climb(0); *g_lo = steepest_climb(1);
+}
+
 int car_selftest(void)
 {
     static const struct { float t100, top, g, catch_s; } target[CAR_NPRESETS] = {   /* best and drift: as measured for build A */
@@ -1076,6 +1210,17 @@ int car_selftest(void)
         for (int k = 0; k < 4; k++)
             if (!(got[k] > 0) || fabsf(got[k] - want[k]) > 0.1f * want[k]) misses++;
         if (!(bt > 2.5f && bt <= 5.5f)) misses++; /* grip-limited, so shorter with more grip */
+    }
+    T = saved;
+    {   /* build D: Low Range (best preset): top speed 30-40 km/h, an idle creep at walking pace, and it climbs what high can't */
+        tuning_apply_text(car_preset(1, NULL));
+        float top, creep, crpm, ghi, glo;
+        low_checks(&top, &creep, &crpm, &ghi, &glo);
+        printf("low range (x%.3f, 4WD, rear locked): top %.0f km/h flat out; idle creep %.1f km/h at %.0f rpm; steepest grade held from walking pace %.0f%% (high range, rear drive: %.0f%%; the game caps slopes at 60%%)\n",
+               T.car_low_ratio, top, creep, crpm, glo * 100, ghi * 100);
+        if (!(top >= 30 && top <= 40)) misses++;
+        if (!(creep > 1.0f && creep < 6.0f)) misses++;
+        if (!(glo > ghi + 0.08f)) misses++;
     }
     T = saved;
     int bad = random_run();

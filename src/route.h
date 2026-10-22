@@ -12,14 +12,14 @@
 #define RT_CHUNK 60         /* samples per chunk: 120 m */
 #define RT_MAX_CHUNKS 128
 
-enum { SURF_ROAD, SURF_VERGE, SURF_DITCH, SURF_ROUGH, SURF_DECK };
+enum { SURF_ROAD, SURF_VERGE, SURF_DITCH, SURF_ROUGH, SURF_DECK, SURF_BED, SURF_WATER, SURF_ROCK };   /* build C: the creek way's gravel bed and its water; build D: its rocks (rock gardens, rocky climbs) */
 
 /* Everything standing beside the road (session 3): a copy of one of the plant or prop templates (tools/make_plants.py,
  * tools/make_hut.py). kind: 0 = a trunk or post (the car's run ends on it, r = its radius), 2 = soft (shrubs, ferns,
  * grass, litter, logs: scenery only), 3 = solid but not drawn (the hut's walls), 4 = drawn, not solid (the hut and
  * props, which have kind 3 rings for collisions). t0/t1: the near and far template (-1 = none); lat: metres off
  * the centreline, which decides which of a chunk's parts the plant goes in. */
-typedef struct { float x, z, r, h, yaw, scale, lat; uint32_t seed; unsigned char kind; short t0, t1; } RtTree;
+typedef struct { float x, z, r, h, yaw, scale, lat; uint32_t seed; unsigned char kind, wood; short t0, t1; } RtTree;   /* build C: wood = 1 on a firewood log and its posts (the only logs in Explorer) */
 
 /* Plant and prop templates, read from assets-built/plants.txt and hut.txt. Triangles in the game's axes about the
  * plant's base; kind per triangle: 'b' bark/wood, 'l' leaves, 'g' ground cover. */
@@ -61,6 +61,39 @@ typedef struct {
     /* the junction (follow-up): Cattlemans Link Trail leaving the route at junction_s; a stub of it every 2 m
      * (spur_x/z/h, spur_n points) up to a gate across it at gate_t metres */
     float junction_s, jx, jz; int spur_n; float spur_x[64], spur_z[64], spur_h[64]; float gate_t, gate_x, gate_z, gate_yaw;
+    /* build C: Explorer. explore = the world as Explorer has it (only the firewood logs; the creek way open); the chunks are
+     * rebuilt when it changes. nwood: the firewood logs, by where they lie */
+    int explore;
+    int nwood, wood_clearing, wood_road, wood_creek, wood_bridge;
+    /* build C: the creek way (creek.csv, creek_dem.bin; scripts/build_creek.py): a second line, down Solomons Creek from the
+     * hut's clearing to the ford, with its own strip of ground and bush in chunks nchunks .. nchunks + ck_nch - 1. Open only in
+     * Explorer (its edge joins the world's); its chunks are streamed only while creek_stream is set (the car near or in it). */
+    int ck_n, ck_nch; float *ck_x, *ck_z, *ck_bed, *ck_head; float ck_len;
+    float ck_exit_s;                        /* where it leaves the clearing: the way in */
+    float ckb_x0, ckb_z0, ckb_cell; int ckb_nx, ckb_nz; int *ckb_first, *ckb_list; unsigned char *ckb_near;
+    float ck_jam_s[4]; int ck_jam_side[4], ck_njam; float ck_fall_s; int ck_fall_side;
+    int creek_stream;
+    float tell_x, tell_z, tell_yaw, post_x, post_z, post_yaw;   /* the way in's blazed tree and fallen post (drawn by the clearing's chunk) */
+    /* build D: the harder creek. Rock gardens (ck_rock_s0..s1: humped rocks across the bed, Low Range country), climb-outs
+     * (ck_byp: a raised rocky bench on one side round a log jam, a fallen tree right across, or the waterfall), fallen trees
+     * (ck_df: 0 part way across, 1 right across, 2 along the bank), the old stock route's markers, and the cattleman's camp */
+    int ck_nrock; float ck_rock_s0[6], ck_rock_s1[6];
+    int ck_nhump; float *ck_hump;           /* rocks under the rock gardens: x, z, radius, height (4 floats each), sorted by s */
+    int *ck_hump_first;                     /* per 2 m creek sample: the first hump at or after it (ck_n + 1) */
+    int ck_nbyp; float ck_byp_s[8], ck_byp_h[8]; int ck_byp_side[8], ck_byp_kind[8];   /* kind 0 log jam, 1 fallen tree, 2 the waterfall */
+    int ck_ndf; float ck_df_s[24]; int ck_df_kind[24], ck_df_side[24];
+    int ck_nmark; float ck_mark_x[12], ck_mark_z[12], ck_mark_yaw[12], ck_mark_s[12]; int ck_mark_v[12];
+    float camp_s, camp_x, camp_z, camp_yaw, trunk_x, trunk_z, trunk_yaw; int camp_on, camp_side;
+    /* build D, part 2: the creek way's drive-over things. Each is a bump in Explorer's ground, shaped as a 0.45 m tyre rolling
+     * over it: stones (domes), stumps (rounded blocks), branches, small logs and mossy fallen trees (ridges along yaw, from half
+     * length l each side), boulders (broad domes). Indexed on a 4 m grid. Wet logs are listed separately (they move: main.c). */
+    int ck_nbit; struct RtBit { float x, z, yaw, l, r, h; unsigned char type, var; } *ck_bit;
+    float ckg_x0, ckg_z0; int ckg_nx, ckg_nz; int *ckg_first, *ckg_list;
+    int ck_nwet; struct RtWet { float x, z, yaw; int var; } ck_wet[48];
+    int ck_nmoss; float ck_moss_s[32];   /* where the mossy fallen trees cross (the crawl test, the bot's slow places) */
+    /* build D: the stags, standing dead gums (Explorer only; not in the tree list, so Drift never meets them). Each falls
+     * along fall (radians, map convention) and lies as three firewood logs at log_x/z (yaw log_yaw) */
+    int nstag; struct RtStag { float x, z, r, h, fall, log_x[3], log_z[3], log_yaw; int variant, where; } stag[48];   /* where: 0 road, 1 clearing, 2 creek */
     int loaded;
 } Route;
 
@@ -87,8 +120,26 @@ int route_in_clearing(const Route *R, float x, float z);
 /* The side road (Cattlemans Link Trail's first metres): distance from its middle and how far along it (m); 1e9 if far. */
 float route_spur_dist(const Route *R, float x, float z, float *t);
 int route_on_spur(const Route *R, float x, float z);   /* on its gravel or verge, short of its end */
+/* Build C, the creek way: the nearest point of its line (s from upstream, lat + = left going downstream; dist 1e9 if there's
+ * none), a point and the bed's height along it, how wide its strip is there, and whether a point is in its strip (open or not). */
+RtNear route_creek_near(const Route *R, float x, float z);
+void route_creek_point(const Route *R, float s, float *x, float *z);
+float route_creek_bed(const Route *R, float s);
+float route_creek_bedw(const Route *R, float s);
+float route_creek_half(const Route *R, float s);
+int route_in_creek(const Route *R, float x, float z);
+/* Build D: the bot's line down the creek way at s: metres to the left of the line to hold (0 on the bed), and 1 in a place
+ * to go slowly (a climb-out, a rock garden) */
+float route_creek_line(const Route *R, float s, int *slow);
+enum { BIT_STONE, BIT_STUMP, BIT_BRANCH, BIT_SMALLLOG, BIT_MOSSY, BIT_BOULDER, BIT_TWIGS };
+float route_creek_bump(const Route *R, float x, float z);   /* build D, part 2: the height the creek's things add here (Explorer), as a 0.45 m tyre feels it */
+float route_creek_bump_r(const Route *R, float x, float z, float tyre_r);   /* the same for a rounder or sharper feeler (the belly: their real shape) */
+int route_creek_rocky(const Route *R, float s);   /* in a rock garden */
+void route_place_stags(Route *R);   /* build D: after the trees and the creek way's features */
 /* A trunk the car's outline touches (centre pos, yaw and the outline's sizes); returns its index or -1. */
 int route_tree_hit(const Route *R, float cx, float cz, float yaw, float half_w, float front, float rear);
+/* Build C: the ute's shape for small posts, n slices along it (z0..z1 metres, half width hw); 0 = the box as for trunks. */
+void route_set_post_outline(int n, const float *z0, const float *z1, const float *hw);
 /* Least radius of the centreline within `ahead` metres after s. */
 float route_min_radius_ahead(const Route *R, float s, float ahead);
 float route_speed_ahead(const Route *R, float s, float ahead, float alat, float abrake); /* m/s */
@@ -118,6 +169,9 @@ void route_replace_trees(Route *R);
  * route_logs_restore puts every broken log back (changed is told each chunk to rebuild). */
 int route_log_break(Route *R, int post);
 void route_logs_restore(Route *R, void (*changed)(int chunk));
+/* Build C: the log a post belongs to (its index), and breaking the log lying at x, z (Explorer's saved ones); -1 if none. */
+int route_log_index(const Route *R, int post);
+int route_log_break_at(Route *R, float x, float z);
 void route_build_chunk(const Route *R, int index, RtGeom *g);
 void route_geom_free(RtGeom *g);
 /* Build B: one template (a deer) set on the ground and lit, into g's GROUND part. */

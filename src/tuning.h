@@ -18,6 +18,12 @@
     X(donut_bonus) X(donut_min_deg) X(donut_max_kmh) X(donut_box) X(donut_carpark) X(donut_turn_deg) X(yodel_time) X(yodel_score) X(yodel_duck) \
     X(wrong_way_time) \
     X(edge_dist) X(edge_w) X(edge_h) X(edge_stop) X(edge_hut_gap) X(edge_trees) X(edge_scrub) X(offroad_from) X(checkpoint_every) X(deer_seed) X(deer_random) X(minimap) X(offroad_reset) X(score_bank_button) X(log_keep) X(wood_full) \
+    /* build C: Explorer mode, the fires and the night, the hamper, the creek way */ \
+    X(bollard_gap) X(wood_every) X(wood_bridge) X(fire_e) X(fire_n) X(hut_reach) X(night_lights) X(fx_density) X(find_glow) X(fw_whistle) X(fw_finale) \
+    /* build D: Low Range, the creek's markers and camp, the dead trees */ \
+    X(low_max_kmh) X(creek_bench_h) X(creek_ramp) X(creek_rock_h) X(creek_wall_from) X(creek_scrub) X(rock_drag) X(rock_decel) X(marker_reach) X(camp_reach) X(stag_speed) X(stag_keep) \
+    X(body_physics) X(susp_k) X(susp_c) X(body_pitch_i) X(body_roll_i) X(belly_h) X(bumper_h) X(belly_k) X(belly_mu) X(roll_over) X(grip_light) X(knock_max) X(fall_step_h) X(fall_ledge) X(creek_stones) X(moss_scale) X(wet_smash) X(saw_on) X(saw_wear) X(saw_razor_q) \
+    X(trials_on) X(trials_knock) X(trials_land) X(trials_slow) X(gates_n) X(dmg_tyre) X(dmg_body) X(flat_grip) X(flat_drag) X(flat_pull) \
     /* the road's cross-section, the bush, camera and look */ \
     X(road_width) X(verge_w) X(ditch_w) X(ditch_depth) X(bank_w) X(tree_density) X(scrub_density) \
     X(ditch_drag) X(ditch_decel) X(rough_drag) X(grade_gravity) X(tree_min_speed) \
@@ -44,7 +50,9 @@
     X(car_driveline_eff) X(car_engine_inertia) X(car_engine_fric) X(car_engine_fric_rpm) X(car_idle_gain) \
     X(car_clutch_nm) X(car_clutch_bite_rpm) X(car_clutch_full_rpm) \
     X(car_gear_r) X(car_gear_1) X(car_gear_2) X(car_gear_3) X(car_gear_4) X(car_gear_5) X(car_final_drive) \
-    X(car_shift_up_rpm) X(car_shift_down_rpm) X(car_shift_time) X(car_diff_lock_nm) X(car_substeps)
+    X(car_shift_up_rpm) X(car_shift_down_rpm) X(car_shift_time) X(car_diff_lock_nm) X(car_substeps) \
+    /* build D: Low Range (Explorer only) */ \
+    X(car_low_ratio) X(car_low_gears) X(car_low_rear_lock) X(car_low_transfer_nm) X(car_low_pedal_time) X(car_low_throttle_curve)
 
 typedef struct Tuning {
 #define X(n) float n;

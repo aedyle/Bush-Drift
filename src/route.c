@@ -354,9 +354,447 @@ static float road_dist(const Route *R, RtNear n)
     return fabsf(n.lat);
 }
 
+/* ---------------------------------------------------------- the creek way (build C) */
+/* Solomons Creek from the hut's clearing down to the ford (scripts/build_creek.py): a line every 2 m with the bed's height,
+ * a bucket index for its nearest point like the road's, and the widths: the bed (gravel, with water down its middle), and
+ * the strip (to the bank either side). Where the creek leaves the clearing the strip is a narrow gap through the forest's
+ * edge: the way in. */
+static float hut_dist(const Route *R, float x, float z);
+static uint32_t hash32(uint32_t x);
+static float rnd(uint32_t *s);
+static float route_heading_at_creek(const Route *R, float s);
+/* Build D: the harder creek's features, all from the line (no randomness that a new build could shift):
+ * - climb-outs: each log jam and two fallen trees right across the creek get a raised, rocky bench on their open side
+ *   (ck_byp_h above the bed, steep rocky ramps at its ends), and the waterfall's ledge starts with a rocky step up;
+ * - three rock gardens (about 40 m of humped rocks across the bed);
+ * - fallen trees part way across or along the bank every few hundred metres;
+ * - ten markers of the old stock route, evenly down it, and the cattleman's camp on a flat before the ford. */
+static float creek_flatness(const Route *R, float s0) { return fabsf(route_creek_bed(R, s0 - 10.0f) - route_creek_bed(R, s0 + 10.0f)); }
+static int creek_busy(const Route *R, float s0, float room)   /* near a climb-out, the fall or a rock garden */
+{
+    for (int b = 0; b < R->ck_nbyp; b++) if (fabsf(s0 - R->ck_byp_s[b]) < room) return 1;
+    for (int g = 0; g < R->ck_nrock; g++) if (s0 > R->ck_rock_s0[g] - room && s0 < R->ck_rock_s1[g] + room) return 1;
+    return 0;
+}
+static float creek_flattest(const Route *R, float a, float b, float room)
+{
+    float bs = -1, bg = 1e9f;
+    for (float s0 = a; s0 < b; s0 += 4.0f) { if (creek_busy(R, s0, room)) continue; float g = creek_flatness(R, s0); if (g < bg) { bg = g; bs = s0; } }
+    return bs;
+}
+/* ---- build D, part 2: the creek's things to drive over (see route.h). Stones all the way down, thicker in some stretches;
+ * twigs and branches; small rotten logs; stumps and boulders at the bed's edges; mossy fallen trees (some right across, two
+ * at each old log jam); and the wet logs in the water (main.c moves them). */
+#define TYRE_R 0.45f
+static void bit_add(Route *R, int *cap, int type, int var, float x, float z, float yaw, float l, float r, float h)
+{
+    if (R->ck_nbit == *cap) { *cap = *cap ? *cap * 2 : 4096; R->ck_bit = realloc(R->ck_bit, sizeof(R->ck_bit[0]) * (size_t)*cap); }
+    struct RtBit *b = &R->ck_bit[R->ck_nbit++];
+    b->x = x; b->z = z; b->yaw = yaw; b->l = l; b->r = r; b->h = h; b->type = (unsigned char)type; b->var = (unsigned char)var;
+}
+static float bit_reach(const struct RtBit *b) { return b->l + b->r + TYRE_R + 0.2f; }
+static float bit_bump(const struct RtBit *b, float x, float z, float Rt)
+{
+    float dx = x - b->x, dz = z - b->z;
+    if (b->type == BIT_TWIGS) return 0;
+    if (b->type == BIT_STONE || b->type == BIT_BOULDER) {   /* a dome: a ball of radius r, its top at h */
+        float d2 = dx * dx + dz * dz, rr = b->r + Rt; if (d2 >= rr * rr) return 0;
+        return fmaxf((b->h - b->r) + sqrtf(rr * rr - d2) - Rt, 0.0f);
+    }
+    if (b->type == BIT_STUMP) {   /* a short post: flat on top, its edge rounded by the tyre */
+        float d = sqrtf(dx * dx + dz * dz); if (d <= b->r) return b->h; if (d >= b->r + Rt) return 0;
+        float e = d - b->r; return fmaxf(b->h - Rt + sqrtf(Rt * Rt - e * e), 0.0f);
+    }
+    /* a ridge along yaw: a branch, a log, a fallen tree (mossy ones taper from their butt at -l) */
+    float ax = cosf(b->yaw), az = sinf(b->yaw), t = dx * ax + dz * az, n = -dx * az + dz * ax;
+    float tc = clampf(t, -b->l, b->l), d = sqrtf((t - tc) * (t - tc) + n * n), r = b->r;
+    if (b->type == BIT_MOSSY) r = b->r * (1.0f - 0.65f * (tc + b->l) / fmaxf(2.0f * b->l, 0.1f));
+    float rr = r + Rt; if (d >= rr) return 0;
+    return fmaxf(r + sqrtf(rr * rr - d * d) - Rt, 0.0f);
+}
+float route_creek_bump_r(const Route *R, float x, float z, float Rt)
+{
+    if (!R->ck_nbit || !R->explore) return 0;
+    int i = (int)floorf((x - R->ckg_x0) / 4.0f), j = (int)floorf((z - R->ckg_z0) / 4.0f);
+    if (i < 0 || j < 0 || i >= R->ckg_nx || j >= R->ckg_nz) return 0;
+    int c = j * R->ckg_nx + i; float h = 0;
+    for (int q = R->ckg_first[c]; q < R->ckg_first[c + 1]; q++) h = fmaxf(h, bit_bump(&R->ck_bit[R->ckg_list[q]], x, z, Rt));
+    return h;
+}
+float route_creek_bump(const Route *R, float x, float z) { return route_creek_bump_r(R, x, z, TYRE_R); }
+static int bit_clear_of(const Route *R, float s, float x, float z, float room)   /* keep off the markers, the camp, the rifle, the fall's lip, the way in */
+{
+    if (s < R->ck_exit_s + 50.0f || s > R->ck_len - 30.0f) return 0;
+    for (int m = 0; m < R->ck_nmark; m++) if (hypotf(R->ck_mark_x[m] - x, R->ck_mark_z[m] - z) < 4.0f + room) return 0;
+    if (R->camp_on && hypotf(R->camp_x - x, R->camp_z - z) < 12.0f + room) return 0;
+    if (R->camp_on && hypotf(R->trunk_x - x, R->trunk_z - z) < 4.0f + room) return 0;
+    if (fabsf(s - (R->ck_len - 380.0f)) < 6.0f + room) return 0;   /* Quayle's rifle on its gravel bar */
+    if (R->ck_fall_s > 0 && fabsf(s - R->ck_fall_s) < 10.0f + room) return 0;
+    return 1;
+}
+static void creek_bits_build(Route *R)
+{
+    free(R->ck_bit); R->ck_bit = NULL; R->ck_nbit = 0; R->ck_nwet = 0;
+    free(R->ckg_first); free(R->ckg_list); R->ckg_first = R->ckg_list = NULL;
+    int cap = 0; uint32_t sd = 7777u;
+    int nm = 0;
+    for (float s0 = R->ck_exit_s + 50.0f; s0 < R->ck_len - 30.0f; s0 += 1.0f) {
+        float BW = route_creek_bedw(R, s0), hd = route_heading_at_creek(R, s0), cx, cz; route_creek_point(R, s0, &cx, &cz);
+        float dens = T.creek_stones * (0.3f + 0.9f * vnoise(s0 / 110.0f, 3.0f));   /* stones a metre down the creek, more in some stretches */
+        for (int k = 0; k < 3; k++) {
+            if (rnd(&sd) > dens / 3.0f) continue;
+            float lat = (rnd(&sd) * 2.0f - 1.0f) * (BW + 1.2f), x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+            if (!bit_clear_of(R, s0, x, z, 0)) continue;
+            float u = rnd(&sd), r = u < 0.7f ? 0.17f + 0.17f * rnd(&sd) : u < 0.95f ? 0.32f + 0.15f * rnd(&sd) : 0.47f + 0.15f * rnd(&sd);
+            bit_add(R, &cap, BIT_STONE, (int)(rnd(&sd) * 3.0f) % 3, x, z, rnd(&sd) * 6.28f, 0, r, r * (0.55f + 0.3f * rnd(&sd)));
+        }
+        if (rnd(&sd) < 1.0f / 5.0f) {   /* twig litter */
+            float lat = (rnd(&sd) * 2.0f - 1.0f) * (BW + 2.0f), x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+            if (bit_clear_of(R, s0, x, z, 0)) bit_add(R, &cap, BIT_TWIGS, (int)(rnd(&sd) * 2.0f) % 2, x, z, rnd(&sd) * 6.28f, 0, 0, 0);
+        }
+        if (rnd(&sd) < 1.0f / 18.0f) {   /* a fallen branch, any way round */
+            float lat = (rnd(&sd) * 2.0f - 1.0f) * BW, x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+            int v = (int)(rnd(&sd) * 3.0f) % 3; float L = v == 0 ? 2.6f : v == 1 ? 3.0f : 3.5f;
+            if (bit_clear_of(R, s0, x, z, 1.5f)) bit_add(R, &cap, BIT_BRANCH, v, x, z, hd + (rnd(&sd) - 0.5f) * 3.0f, 0.5f * L, 0.08f, 0.16f);
+        }
+        if (rnd(&sd) < 1.0f / 45.0f) {   /* a small rotten log, mostly across */
+            float lat = (rnd(&sd) * 2.0f - 1.0f) * BW * 0.7f, x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+            int v = (int)(rnd(&sd) * 2.0f) % 2; float sc = 0.9f + 0.3f * rnd(&sd), L = (v ? 2.4f : 3.0f) * sc, r = (v ? 0.16f : 0.2f) * sc;
+            if (bit_clear_of(R, s0, x, z, 2.0f)) bit_add(R, &cap, BIT_SMALLLOG, v, x, z, hd + 1.57f + (rnd(&sd) - 0.5f) * 1.2f, 0.5f * L, r, 2.0f * r);
+        }
+        if (rnd(&sd) < 1.0f / 80.0f) {   /* a stump at the bed's edge */
+            float side = rnd(&sd) < 0.5f ? -1.0f : 1.0f, lat = side * (BW - 0.3f + 1.2f * rnd(&sd)), x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+            int v = rnd(&sd) < 0.5f; float sc = 0.85f + 0.3f * rnd(&sd);
+            if (bit_clear_of(R, s0, x, z, 1.5f)) bit_add(R, &cap, BIT_STUMP, v, x, z, rnd(&sd) * 6.28f, 0, 0.4f * sc, (v ? 0.45f : 0.6f) * sc);
+        }
+        if (rnd(&sd) < 1.0f / 65.0f) {   /* a boulder at the bed's edge */
+            float side = rnd(&sd) < 0.5f ? -1.0f : 1.0f, lat = side * (BW + 0.2f + 0.8f * rnd(&sd)), x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+            int v = rnd(&sd) < 0.6f ? 0 : 1; float r = (v ? 1.0f : 0.7f) * (0.85f + 0.3f * rnd(&sd));
+            if (bit_clear_of(R, s0, x, z, 2.0f)) bit_add(R, &cap, BIT_BOULDER, v, x, z, rnd(&sd) * 6.28f, 0, r, r * 0.75f);
+        }
+        (void)nm;
+    }
+    /* mossy fallen trees: two at each old log jam, and one every 380 m or so, right across or angled */
+    float moss_s[32]; int nmoss = 0;
+    for (int j = 0; j < R->ck_njam; j++) { moss_s[nmoss++] = R->ck_jam_s[j]; moss_s[nmoss++] = R->ck_jam_s[j] + 6.0f; }
+    for (float s0 = R->ck_exit_s + 330.0f; s0 < R->ck_len - 200.0f && nmoss < 30; s0 += 380.0f) {
+        float ss = s0 + 80.0f * (vnoise(s0 / 70.0f, 11.0f) - 0.5f); int near = 0;
+        for (int k = 0; k < nmoss; k++) if (fabsf(moss_s[k] - ss) < 120.0f) near = 1;
+        if (!near) moss_s[nmoss++] = ss;
+    }
+    R->ck_nmoss = 0;
+    for (int k = 0; k < nmoss; k++) {
+        float ss = moss_s[k], BW = route_creek_bedw(R, ss), hd = route_heading_at_creek(R, ss), cx, cz; route_creek_point(R, ss, &cx, &cz);
+        if (!bit_clear_of(R, ss, cx, cz, 4.0f)) continue;
+        int v = 2 + (k & 1); float sc = T.moss_scale * (k < 2 * R->ck_njam ? 1.3f : 1.0f), L = (v == 2 ? 14.0f : 11.0f) * sc;   /* the old jams' are bigger: Low Range */
+        float ang = hd + 1.57f + (rnd(&sd) - 0.5f) * 0.8f, side = (k & 2) ? 1.0f : -1.0f, mid = side * (0.5f * L - BW - 1.5f);   /* across the bed, its butt up one bank */
+        float mx = cx - sinf(hd) * mid, mz = cz + cosf(hd) * mid;
+        /* the butt (x < 0 in the model) on the side the middle was pushed to */
+        float bx = mx - cosf(ang) * 0.5f * L, bz = mz - sinf(ang) * 0.5f * L;
+        RtNear bn = route_creek_near(R, bx, bz); if (bn.lat * side < 0) ang += (float)M_PI;
+        bit_add(R, &cap, BIT_MOSSY, v, mx, mz, ang, 0.5f * L, 0.5f * sc, sc);   /* h holds the drawing scale */
+        if (R->ck_nmoss < 32) R->ck_moss_s[R->ck_nmoss++] = ss;
+    }
+    /* the wet logs: in the water, about one every 280 m, and two more at each jam */
+    for (float s0 = R->ck_exit_s + 180.0f; s0 < R->ck_len - 60.0f && R->ck_nwet < 40; s0 += 280.0f) {
+        float ss = s0 + 60.0f * (vnoise(s0 / 50.0f, 17.0f) - 0.5f), BW = route_creek_bedw(R, ss), hd = route_heading_at_creek(R, ss), cx, cz; route_creek_point(R, ss, &cx, &cz);
+        float lat = (rnd(&sd) - 0.5f) * 0.5f * BW, x = cx - sinf(hd) * lat, z = cz + cosf(hd) * lat;
+        if (!bit_clear_of(R, ss, x, z, 3.0f)) continue;
+        struct RtWet *w = &R->ck_wet[R->ck_nwet++]; w->x = x; w->z = z; w->yaw = hd + (rnd(&sd) - 0.5f) * 2.4f; w->var = R->ck_nwet & 1;
+    }
+    for (int j = 0; j < R->ck_njam && R->ck_nwet < 46; j++)
+        for (int k = 0; k < 2; k++) {
+            float ss = R->ck_jam_s[j] - 6.0f + 15.0f * (float)k, hd = route_heading_at_creek(R, ss), cx, cz; route_creek_point(R, ss, &cx, &cz);
+            struct RtWet *w = &R->ck_wet[R->ck_nwet++]; w->x = cx; w->z = cz; w->yaw = hd + 1.2f * (float)(k * 2 - 1); w->var = k;
+        }
+    if (R->ck_fall_s > 0 && 0) {   /* the waterfall's lip: boulders across the bed (part 2: none; you drive down the chute) */
+        float fs = R->ck_fall_s, hd = route_heading_at_creek(R, fs), side = (float)R->ck_fall_side, BW = route_creek_bedw(R, fs), cx, cz;
+        route_creek_point(R, fs - 2.0f, &cx, &cz);
+        for (float lat = -side * (BW + 6.0f); fabsf(lat + side * (BW + 6.0f)) < 2.0f * BW + 5.7f; lat += side * 1.9f) {
+            float bx = cx - sinf(hd) * lat, bz = cz + cosf(hd) * lat, sc = 1.0f + 0.2f * vnoise(lat, 3.0f);
+            bit_add(R, &cap, BIT_BOULDER, 1, bx, bz, lat, 0, 1.0f * sc * 0.8f, 0.75f * sc * 0.8f);
+        }
+    }
+    /* the 4 m grid over them */
+    float x0 = 1e9f, z0 = 1e9f, x1 = -1e9f, z1 = -1e9f;
+    for (int i = 0; i < R->ck_nbit; i++) { float rch = bit_reach(&R->ck_bit[i]); x0 = fminf(x0, R->ck_bit[i].x - rch); z0 = fminf(z0, R->ck_bit[i].z - rch); x1 = fmaxf(x1, R->ck_bit[i].x + rch); z1 = fmaxf(z1, R->ck_bit[i].z + rch); }
+    if (!R->ck_nbit) return;
+    R->ckg_x0 = x0; R->ckg_z0 = z0; R->ckg_nx = (int)((x1 - x0) / 4.0f) + 1; R->ckg_nz = (int)((z1 - z0) / 4.0f) + 1;
+    int nc = R->ckg_nx * R->ckg_nz, *cnt = calloc((size_t)nc, sizeof(int)), tot = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) { R->ckg_first = calloc((size_t)nc + 1, sizeof(int)); for (int c = 0; c < nc; c++) R->ckg_first[c + 1] = R->ckg_first[c] + cnt[c]; R->ckg_list = malloc(sizeof(int) * (size_t)(tot > 0 ? tot : 1)); memset(cnt, 0, sizeof(int) * (size_t)nc); }
+        for (int b = 0; b < R->ck_nbit; b++) {
+            const struct RtBit *q = &R->ck_bit[b]; if (q->type == BIT_TWIGS) continue;
+            float rch = bit_reach(q);
+            int i0 = (int)((q->x - rch - x0) / 4.0f), i1 = (int)((q->x + rch - x0) / 4.0f), j0 = (int)((q->z - rch - z0) / 4.0f), j1 = (int)((q->z + rch - z0) / 4.0f);
+            for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
+                if (i < 0 || j < 0 || i >= R->ckg_nx || j >= R->ckg_nz) continue;
+                int c = j * R->ckg_nx + i;
+                if (pass == 0) { cnt[c]++; tot++; } else R->ckg_list[R->ckg_first[c] + cnt[c]++] = b;
+            }
+        }
+    }
+    free(cnt);
+    int nt[7] = { 0 }; for (int b = 0; b < R->ck_nbit; b++) nt[R->ck_bit[b].type]++;
+    fprintf(stderr, "route: the creek's things: %d stones, %d stumps, %d branches, %d small logs, %d mossy fallen trees, %d boulders, %d twig litters; %d wet logs\n",
+            nt[BIT_STONE], nt[BIT_STUMP], nt[BIT_BRANCH], nt[BIT_SMALLLOG], nt[BIT_MOSSY], nt[BIT_BOULDER], nt[BIT_TWIGS], R->ck_nwet);
+}
+
+static void creek_features_d(Route *R)
+{
+    float L = R->ck_len, ex = R->ck_exit_s;
+    R->ck_nbyp = 0; R->ck_nrock = 0; R->ck_ndf = 0; R->ck_nmark = 0; R->camp_on = 0;
+    /* part 2: no benches round the jams and the fallen trees (they're driven over now); the waterfall's step stays */
+    if (R->ck_fall_s > 0) { int b = R->ck_nbyp++; R->ck_byp_s[b] = R->ck_fall_s; R->ck_byp_side[b] = R->ck_fall_side; R->ck_byp_h[b] = T.creek_bench_h; R->ck_byp_kind[b] = 2; }
+    const float rock_at[3] = { 0.16f, 0.48f, 0.87f };
+    for (int k = 0; k < 0; k++) {   /* part 2: no rock gardens (stones all the way down instead) */
+        float bs = creek_flattest(R, L * rock_at[k] - 200.0f, L * rock_at[k] + 200.0f, 160.0f);
+        if (bs < 0) continue;
+        int g = R->ck_nrock++; R->ck_rock_s0[g] = bs - 20.0f; R->ck_rock_s1[g] = bs + 20.0f;
+    }
+    /* the rocks under each rock garden: humps on a jittered grid across the bed (the same numbers every build) */
+    free(R->ck_hump); free(R->ck_hump_first);
+    R->ck_hump = malloc(sizeof(float) * 4 * 600); R->ck_hump_first = calloc((size_t)R->ck_nrock + 1, sizeof(int)); R->ck_nhump = 0;
+    for (int g = 0; g < R->ck_nrock; g++) {
+        R->ck_hump_first[g] = R->ck_nhump;
+        uint32_t sd = 5150u + (uint32_t)g * 977u;
+        for (float s0 = R->ck_rock_s0[g] + 1.0f; s0 < R->ck_rock_s1[g] - 0.5f; s0 += 1.7f) {
+            float BW = route_creek_bedw(R, s0), hd = route_heading_at_creek(R, s0), cx, cz; route_creek_point(R, s0, &cx, &cz);
+            for (float lat = -BW - 0.6f; lat <= BW + 0.6f && R->ck_nhump < 600; lat += 1.8f) {
+                if (rnd(&sd) > 0.72f) continue;
+                float l2 = lat + (rnd(&sd) - 0.5f) * 0.9f, ds = (rnd(&sd) - 0.5f) * 0.8f;
+                float *q = R->ck_hump + 4 * R->ck_nhump++;
+                q[0] = cx - sinf(hd) * l2 + cosf(hd) * ds; q[1] = cz + cosf(hd) * l2 + sinf(hd) * ds;
+                q[2] = 0.85f + 0.45f * rnd(&sd); q[3] = T.creek_rock_h * (0.65f + 0.35f * rnd(&sd));
+            }
+        }
+    }
+    R->ck_hump_first[R->ck_nrock] = R->ck_nhump;
+    /* the camp: the flattest stretch before the ford, clear of the rifle's gravel bar (380 m up) */
+    R->camp_s = creek_flattest(R, L - 330.0f, L - 170.0f, 60.0f);
+    if (R->camp_s > 0) {
+        float hd = route_heading_at_creek(R, R->camp_s), BW = route_creek_bedw(R, R->camp_s), cx, cz; route_creek_point(R, R->camp_s, &cx, &cz);
+        R->camp_side = 1;
+        float lat = (float)R->camp_side * (BW + 8.0f);
+        R->camp_x = cx - sinf(hd) * lat; R->camp_z = cz + cosf(hd) * lat; R->camp_yaw = hd - (float)M_PI * 0.5f * (float)R->camp_side;   /* its open side (the model's +x) to the water */
+        float l2 = (float)R->camp_side * (BW + 5.5f);
+        R->trunk_x = cx - sinf(hd) * l2 + cosf(hd) * 4.0f; R->trunk_z = cz + cosf(hd) * l2 + sinf(hd) * 4.0f; R->trunk_yaw = hd;
+        R->camp_on = 1;
+    }
+    /* part 2: the old fallen trees and log jams are now the creek's things (creek_bits_build) */
+    /* the stock route's markers: ten, evenly from past the bend to the camp, nudged off the busy places */
+    float m0 = ex + 300.0f, m1 = (R->camp_on ? R->camp_s : L) - 140.0f;
+    static const int mv[10] = { 0, 1, 2, 3, 4, 1, 0, 3, 2, 4 };
+    for (int k = 0; k < 10; k++) {
+        float ms = m0 + (m1 - m0) * (float)k / 9.0f;
+        for (int t = 0; t < 12 && (creek_busy(R, ms, 45.0f) || (R->camp_on && fabsf(ms - R->camp_s) < 60.0f)); t++) ms += (t & 1 ? -1.0f : 1.0f) * 15.0f * (float)(t + 1);
+        for (int d = 0; d < R->ck_ndf; d++) if (fabsf(ms - R->ck_df_s[d]) < 18.0f) ms += 25.0f;
+        float hd = route_heading_at_creek(R, ms), BW = route_creek_bedw(R, ms), cx, cz; route_creek_point(R, ms, &cx, &cz);
+        float side = (k & 1) ? 1.0f : -1.0f, lat = side * fminf(BW + 2.6f, 6.3f);   /* just off the bed, never far from the way down */
+        int m = R->ck_nmark++;
+        R->ck_mark_s[m] = ms; R->ck_mark_x[m] = cx - sinf(hd) * lat; R->ck_mark_z[m] = cz + cosf(hd) * lat;
+        R->ck_mark_yaw[m] = hd + (float)M_PI; R->ck_mark_v[m] = mv[k];   /* the blaze, the shoe or the sign facing upstream: seen as you come down */
+    }
+    fprintf(stderr, "route: the creek's climb-outs at");
+    for (int b = 0; b < R->ck_nbyp; b++) fprintf(stderr, " %.0f (%s)", R->ck_byp_s[b], R->ck_byp_kind[b] == 0 ? "log jam" : R->ck_byp_kind[b] == 1 ? "fallen tree" : "waterfall");
+    fprintf(stderr, "; rock gardens at");
+    for (int g = 0; g < R->ck_nrock; g++) fprintf(stderr, " %.0f-%.0f", R->ck_rock_s0[g], R->ck_rock_s1[g]);
+    fprintf(stderr, " (%d rocks); %d fallen trees; %d markers; the camp at %.0f m\n", R->ck_nhump, R->ck_ndf, R->ck_nmark, R->camp_s);
+    creek_bits_build(R);
+}
+
+/* Where the creek leaves the clearing (the way in), where it falls (the steepest drop), and two log jams on its flats. */
+static void creek_features(Route *R)
+{
+    float near_s = 0, nd = 1e9f;
+    for (int i = 0; i < R->ck_n; i++) { float d = hypotf(R->ck_x[i] - R->hut_x, R->ck_z[i] - R->hut_z); if (d < nd) { nd = d; near_s = (float)i * RT_DS; } }
+    R->ck_exit_s = near_s;
+    for (float s0 = near_s; s0 < R->ck_len; s0 += 2.0f) { float x, z; route_creek_point(R, s0, &x, &z); if (hut_dist(R, x, z) > 0.5f) { R->ck_exit_s = s0; break; } }
+    float best = 0; R->ck_fall_s = 0;
+    for (float s0 = 2500.0f; s0 < R->ck_len - 800.0f; s0 += 2.0f) { float d = route_creek_bed(R, s0) - route_creek_bed(R, s0 + 10.0f); if (d > best) { best = d; R->ck_fall_s = s0 + 5.0f; } }
+    R->ck_fall_side = 1;
+    const float lo[2] = { 0.25f, 0.74f }, hi[2] = { 0.32f, 0.84f };
+    R->ck_njam = 0;
+    for (int j = 0; j < 2; j++) {
+        float bs = 0, bg = 1e9f;
+        for (float s0 = R->ck_len * lo[j]; s0 < R->ck_len * hi[j]; s0 += 4.0f) { float g = fabsf(route_creek_bed(R, s0 - 10.0f) - route_creek_bed(R, s0 + 10.0f)); if (g < bg && fabsf(s0 - R->ck_fall_s) > 200.0f) { bg = g; bs = s0; } }
+        if (bs > 0) { R->ck_jam_s[R->ck_njam] = bs; R->ck_jam_side[R->ck_njam] = j ? -1 : 1; R->ck_njam++; }
+    }
+    fprintf(stderr, "route: the creek way leaves the clearing at %.0f m (nearest the hut at %.0f m, %.0f m off); falls %.1f m at %.0f m; log jams at %.0f and %.0f m\n",
+            R->ck_exit_s, near_s, nd, best, R->ck_fall_s, R->ck_njam > 0 ? R->ck_jam_s[0] : 0.0f, R->ck_njam > 1 ? R->ck_jam_s[1] : 0.0f);
+    creek_features_d(R);
+}
+
+static int read_creek(Route *R, const char *dir)
+{
+    char p[512]; snprintf(p, sizeof(p), "%s/creek.csv", dir);
+    FILE *f = fopen(p, "r");
+    if (!f) return 0;
+    char line[256]; int cap = 0;
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return 0; }
+    while (fgets(line, sizeof(line), f)) {
+        float s0, x, y, bed, dm, hd, k;
+        if (sscanf(line, "%f,%f,%f,%f,%f,%f,%f", &s0, &x, &y, &bed, &dm, &hd, &k) != 7) continue;
+        if (R->ck_n == cap) {
+            cap = cap ? cap * 2 : 4096;
+            R->ck_x = realloc(R->ck_x, sizeof(float) * cap); R->ck_z = realloc(R->ck_z, sizeof(float) * cap);
+            R->ck_bed = realloc(R->ck_bed, sizeof(float) * cap); R->ck_head = realloc(R->ck_head, sizeof(float) * cap);
+        }
+        R->ck_x[R->ck_n] = x; R->ck_z[R->ck_n] = y; R->ck_bed[R->ck_n] = bed; R->ck_head[R->ck_n] = hd; R->ck_n++;
+    }
+    fclose(f);
+    if (R->ck_n < 10) { R->ck_n = 0; return 0; }
+    R->ck_len = (float)(R->ck_n - 1) * RT_DS;
+    /* buckets */
+    float minx = 1e30f, maxx = -1e30f, minz = 1e30f, maxz = -1e30f;
+    for (int i = 0; i < R->ck_n; i++) { minx = fminf(minx, R->ck_x[i]); maxx = fmaxf(maxx, R->ck_x[i]); minz = fminf(minz, R->ck_z[i]); maxz = fmaxf(maxz, R->ck_z[i]); }
+    R->ckb_cell = 20.0f; R->ckb_x0 = minx - 1; R->ckb_z0 = minz - 1;
+    R->ckb_nx = (int)((maxx - R->ckb_x0) / R->ckb_cell) + 2; R->ckb_nz = (int)((maxz - R->ckb_z0) / R->ckb_cell) + 2;
+    int nb = R->ckb_nx * R->ckb_nz;
+    R->ckb_first = calloc((size_t)nb + 1, sizeof(int)); R->ckb_list = malloc(sizeof(int) * (size_t)R->ck_n);
+    int *cnt = calloc((size_t)nb, sizeof(int));
+    for (int i = 0; i < R->ck_n; i++) cnt[(int)((R->ck_z[i] - R->ckb_z0) / R->ckb_cell) * R->ckb_nx + (int)((R->ck_x[i] - R->ckb_x0) / R->ckb_cell)]++;
+    for (int b = 0; b < nb; b++) R->ckb_first[b + 1] = R->ckb_first[b] + cnt[b];
+    memset(cnt, 0, sizeof(int) * (size_t)nb);
+    for (int i = 0; i < R->ck_n; i++) { int b = (int)((R->ck_z[i] - R->ckb_z0) / R->ckb_cell) * R->ckb_nx + (int)((R->ck_x[i] - R->ckb_x0) / R->ckb_cell); R->ckb_list[R->ckb_first[b] + cnt[b]++] = i; }
+    free(cnt);
+    R->ckb_near = calloc((size_t)nb, 1);   /* buckets within about 80 m of the line: anywhere else is "not near the creek", at once */
+    for (int i = 0; i < R->ck_n; i += 4) {
+        int bx = (int)((R->ck_x[i] - R->ckb_x0) / R->ckb_cell), bz = (int)((R->ck_z[i] - R->ckb_z0) / R->ckb_cell);
+        for (int j = bz - 5; j <= bz + 5; j++) for (int q = bx - 5; q <= bx + 5; q++) if (q >= 0 && j >= 0 && q < R->ckb_nx && j < R->ckb_nz) R->ckb_near[j * R->ckb_nx + q] = 1;
+    }
+    R->ck_nch = (R->ck_n - 1 + RT_CHUNK - 1) / RT_CHUNK;
+    return 1;
+}
+
+RtNear route_creek_near(const Route *R, float x, float z)
+{
+    RtNear r = { 0, 0, 1e9f, 0 };
+    if (R->ck_n < 2) return r;
+    int cx = (int)floorf((x - R->ckb_x0) / R->ckb_cell), cz = (int)floorf((z - R->ckb_z0) / R->ckb_cell);
+    if (cx < 0 || cz < 0 || cx >= R->ckb_nx || cz >= R->ckb_nz || !R->ckb_near[cz * R->ckb_nx + cx]) return r;
+    float best = 1e30f; int bi = -1;
+    for (int k = 0; k < 6; k++) {   /* rings out to 120 m; further than that is "not near the creek" */
+        for (int j = cz - k; j <= cz + k; j++) {
+            if (j < 0 || j >= R->ckb_nz) continue;
+            int step = (j == cz - k || j == cz + k) ? 1 : 2 * k;
+            for (int i = cx - k; i <= cx + k; i += step > 0 ? step : 1) {
+                if (i >= 0 && i < R->ckb_nx) {
+                    int b = j * R->ckb_nx + i;
+                    for (int q = R->ckb_first[b]; q < R->ckb_first[b + 1]; q++) {
+                        int s2 = R->ckb_list[q]; float dx = R->ck_x[s2] - x, dz = R->ck_z[s2] - z, d = dx * dx + dz * dz;
+                        if (d < best) { best = d; bi = s2; }
+                    }
+                }
+                if (step == 0) break;
+            }
+        }
+        float ring = (float)k * R->ckb_cell;
+        if (bi >= 0 && ring * ring > best) break;
+    }
+    if (bi < 0) return r;
+    float bestd = 1e30f;
+    for (int e = -1; e <= 0; e++) {
+        int a = bi + e, b = a + 1;
+        if (a < 0 || b >= R->ck_n) continue;
+        float tx = R->ck_x[b] - R->ck_x[a], tz = R->ck_z[b] - R->ck_z[a], L2 = tx * tx + tz * tz;
+        float t = L2 > 0 ? ((x - R->ck_x[a]) * tx + (z - R->ck_z[a]) * tz) / L2 : 0;
+        t = clampf(t, 0, 1);
+        float fx = R->ck_x[a] + tx * t, fz = R->ck_z[a] + tz * t, dx = x - fx, dz = z - fz, d = dx * dx + dz * dz;
+        if (d < bestd) { float L = sqrtf(L2); bestd = d; r.s = ((float)a + t) * RT_DS; r.lat = L > 0 ? (tx * (z - R->ck_z[a]) - tz * (x - R->ck_x[a])) / L : 0; r.dist = sqrtf(d); r.i = t < 0.5f ? a : b; }
+    }
+    return r;
+}
+void route_creek_point(const Route *R, float s, float *x, float *z)
+{
+    float u = clampf(s / RT_DS, 0, (float)(R->ck_n - 1)); int i = (int)u; if (i >= R->ck_n - 1) i = R->ck_n - 2;
+    float t = u - (float)i;
+    *x = R->ck_x[i] + (R->ck_x[i + 1] - R->ck_x[i]) * t; *z = R->ck_z[i] + (R->ck_z[i + 1] - R->ck_z[i]) * t;
+}
+float route_creek_bed(const Route *R, float s)
+{
+    float u = clampf(s / RT_DS, 0, (float)(R->ck_n - 1)); int i = (int)u; if (i >= R->ck_n - 1) i = R->ck_n - 2;
+    return R->ck_bed[i] + (R->ck_bed[i + 1] - R->ck_bed[i]) * (u - (float)i);
+}
+/* The bed's half width: 3 to 6 m, wider on the flats */
+float route_creek_bedw(const Route *R, float s)
+{
+    float w0 = 3.0f + 3.0f * vnoise(s / 140.0f, 4.0f);
+    if (!R || R->ck_exit_s <= 0) return w0;
+    /* build D: narrower past the way in (2.6 to 5 m), blended in over 40 m */
+    float w1 = 2.4f + 2.0f * vnoise(s / 140.0f, 4.0f);   /* part 2: a little narrower again */
+    return w0 + (w1 - w0) * smooth01((s - R->ck_exit_s - 40.0f) / 40.0f);
+}
+/* The strip's half width (out to where its bank starts): about 20 m, but through the forest's edge where the creek leaves
+ * the clearing, a gap the ute just fits (the bank starts 3 m inside the line, so it's held 3.5 m out either side) */
+float route_creek_half(const Route *R, float s)
+{
+    float g1 = R->ck_exit_s + 30.0f, wide = 7.0f + 3.0f * vnoise(s / 90.0f, 9.0f);   /* build D: narrow (Build C: 16 to 23 m); part 2: 7 to 10 m */
+    wide += 8.0f * smooth01((vnoise(s / 260.0f, 21.0f) - 0.62f) / 0.1f);   /* now and then a wider flat to breathe */
+    if (R->ck_fall_s > 0 && s > R->ck_fall_s - 80.0f && s < R->ck_fall_s + 50.0f) wide = fmaxf(wide, route_creek_bedw(R, s) + 14.0f);   /* room for the way round the waterfall */
+    if (R->camp_on && fabsf(s - R->camp_s) < 30.0f) wide = fmaxf(wide, (route_creek_bedw(R, s) + 16.0f) * (1.0f - smooth01((fabsf(s - R->camp_s) - 18.0f) / 12.0f)));   /* the camp's flat */
+    if (s < g1) return -3.0f;
+    return -3.0f + (wide + 3.0f) * smooth01((s - g1) / 45.0f);
+}
+/* How far into the creek way's bank a point is, by its distance from the line. Build D: through the gap the floor is flat for
+ * 1.2 m either side of the line and the bank rises steeply past that (held at 3.4 m: the ute only just fits); where the strip
+ * opens out it's the old rule, distance less the strip's half width. */
+static float creek_chan_e(const Route *R, float s, float d)
+{
+    float half = route_creek_half(R, s), k = 1.0f + 1.95f * (1.0f - smooth01((half - 1.2f) / 3.0f));
+    return k * (d - fmaxf(half, 1.2f));
+}
+static float creek_edge(const Route *R, float x, float z)
+{
+    if (!R->explore || R->ck_n < 2) return 1e9f;
+    RtNear c = route_creek_near(R, x, z);
+    if (c.dist > 200.0f || c.s < R->ck_exit_s - 30.0f) return 1e9f;   /* upstream of the way in: closed */
+    return creek_chan_e(R, c.s, c.dist);
+}
+float route_creek_line(const Route *R, float s, int *slow)
+{
+    float lat = 0; int sl = 0;
+    for (int b = 0; b < R->ck_nbyp; b++) {
+        float js = R->ck_byp_s[b], BW = route_creek_bedw(R, s);
+        if (R->ck_byp_kind[b] == 2 && T.fall_ledge != 0) { if (s > js - 66.0f && s < js + 36.0f) { float k = smooth01((s - (js - 66.0f)) / 18.0f) * (1.0f - smooth01((s - (js + 22.0f)) / 14.0f)); lat = (float)R->ck_byp_side[b] * (BW + 5.5f) * k; sl = 1; } }   /* part 2: eased onto the run-in, then straight up the step */
+        else if (s > js - 30.0f && s < js + 27.0f) { lat = (float)R->ck_byp_side[b] * (BW + 3.2f); sl = 1; }
+    }
+    for (int k = 0; k < R->ck_nmoss; k++) if (fabsf(s - R->ck_moss_s[k]) < 14.0f) sl = 1;   /* part 2: crawl over the mossy fallen trees */
+    for (int d = 0; d < R->ck_ndf; d++)   /* round a fallen tree part way across: on the open side */
+        if (R->ck_df_kind[d] == 0 && fabsf(s - R->ck_df_s[d]) < 14.0f) { lat = -(float)R->ck_df_side[d] * (0.3f * route_creek_bedw(R, s) + 2.0f); sl = 1; }
+    if (route_creek_rocky(R, s)) sl = 1;
+    if (slow) *slow = sl;
+    return lat;
+}
+int route_creek_rocky(const Route *R, float s)
+{
+    for (int g = 0; g < R->ck_nrock; g++) if (s > R->ck_rock_s0[g] - 6.0f && s < R->ck_rock_s1[g] + 4.0f) return 1;
+    return 0;
+}
+int route_in_creek(const Route *R, float x, float z)
+{
+    if (R->ck_n < 2) return 0;
+    RtNear c = route_creek_near(R, x, z);
+    return c.dist < 200.0f && c.s >= R->ck_exit_s - 30.0f && creek_chan_e(R, c.s, c.dist) < T.edge_stop;
+}
+
+/* Build D: the thicket where the creek leaves the clearing (Explorer). From a little before the way in and for 220 m past
+ * it, everything beside the creek's own channel is closed, whatever the clearing's hollow says: the bank and the scrub wrap
+ * both sides, so the only way into the creek way is the gap itself. It rises over 16 m where it starts, so it's a bank, not a
+ * cliff. Below 0 everywhere else. */
+static float creek_wall(const Route *R, float x, float z)
+{
+    if (!R->explore || R->ck_n < 2) return -1e9f;
+    RtNear c = route_creek_near(R, x, z);
+    float a = R->ck_exit_s - T.creek_wall_from;
+    if (c.dist > 110.0f || c.s < a - 16.0f || c.s > R->ck_exit_s + 220.0f) return -1e9f;
+    float e = fminf(creek_chan_e(R, c.s, c.dist), 20.0f);   /* build E: capped where the bank's height tops out ... */
+    e -= 45.0f * smooth01((c.dist - 80.0f) / 30.0f);   /* ... and eased down to open ground by 110 m out (it ended there in a 4 m cliff) */
+    return e - 30.0f * (1.0f - smooth01((c.s - (a - 16.0f)) / 16.0f));
+}
 float route_edge(const Route *R, RtNear n, float x, float z)
 {
-    return fminf(road_dist(R, n) - T.edge_dist, hut_dist(R, x, z) - T.edge_hut_gap);
+    return fmaxf(fminf(fminf(road_dist(R, n) - T.edge_dist, hut_dist(R, x, z) - T.edge_hut_gap), creek_edge(R, x, z)), creek_wall(R, x, z));
 }
 float route_edge_at(const Route *R, float x, float z) { return route_edge(R, route_near(R, x, z), x, z); }
 int route_in_clearing(const Route *R, float x, float z)
@@ -368,6 +806,7 @@ int route_in_clearing(const Route *R, float x, float z)
 /* Cattlemans Link Trail (OSM way 395705240) meets the route where Robinsons Track ends and Cattlemens Track turns
  * south for the bridge. Its first metres, from OSM, metres east/north of the OSM junction node (-36.722195, 149.4565126);
  * the game's road was smoothed through the corner and passes 23 m inside it, so the stub is hung on the nearest point. */
+#define BOLLARD_R 0.16f   /* a bollard's solid core */
 #define SPUR_LEN 42.0f
 #define JUNCTION_R 7.5f
 static const float SPUR_OSM[][2] = { { 0, 0 }, { -34.7f, 16.5f }, { -53.1f, 30.0f }, { -56.9f, 41.6f }, { -57.2f, 56.8f } };
@@ -468,8 +907,61 @@ static float profile(const Route *R, RtNear n, float x, float z, int *surf)
             else if (sf == SURF_ROUGH) { float hb = hs - 0.04f; h = hb + (h - hb) * fmaxf(smooth01((d2 - e2) / B), 1.0f - fade); }
         }
     }
+    /* build C: the creek way's bed, cut into the ground along its line (never near the road: the road's own ford takes it) */
+    if (R->ck_n > 1 && sf == SURF_ROUGH) {
+        RtNear cn = route_creek_near(R, x, z);
+        float BW = route_creek_bedw(R, cn.s);
+        if (cn.dist < BW + 12.0f) {
+            float wr = smooth01((road_dist(R, n) - 30.0f) / 18.0f);
+            if (wr > 0) {
+                float a2 = cn.dist, bed = route_creek_bed(R, cn.s);
+                float hb = bed + (a2 < BW ? 0.04f * (a2 / BW) : 0.04f + 0.22f * (a2 - BW));
+                float hc = hb + (h - hb) * smooth01((a2 - BW) / 11.0f);
+                if (hc < h) h += (hc - h) * wr;
+                if (wr > 0.5f) { if (a2 < 0.3f * BW + 0.5f * vnoise(cn.s / 20.0f, 2.0f)) sf = SURF_WATER; else if (a2 < BW) sf = SURF_BED; }
+                /* the way round the waterfall: a ledge cut into the bank on one side, an even ramp down past the drop. Build D: it
+                 * starts with a rocky step up of creek_bench_h (Low Range), then eases down to below the fall */
+                if (T.fall_ledge != 0 && R->ck_fall_s > 0 && cn.s > R->ck_fall_s - 66.0f && cn.s < R->ck_fall_s + 40.0f && cn.lat * (float)R->ck_fall_side > 0 && a2 > BW + 0.6f) {
+                    float L0 = R->ck_fall_s - 32.0f, L1 = R->ck_fall_s + 32.0f, hl = route_creek_bed(R, L0) + (route_creek_bed(R, L1) - route_creek_bed(R, L0)) * smooth01((cn.s - L0) / (L1 - L0)) + 0.15f;
+                    float up = smooth01((cn.s - (L0 + 1.0f)) / T.creek_ramp) * (1.0f - smooth01((cn.s - (R->ck_fall_s + 4.0f)) / 22.0f));
+                    hl += T.fall_step_h * up;   /* part 2: 0 by default (with the sprung body the step and its run-in tripped the ute; the ledge alone is the way round) */
+                    hl = fmaxf(hl, route_creek_bed(R, cn.s) + 0.15f);   /* part 2: never a pit below the bed where it rejoins */
+                    float ds_ = cn.s - R->ck_fall_s, ws = ds_ < 0 ? 1.0f - smooth01((-ds_ - 56.0f) / 10.0f) : 1.0f - smooth01((ds_ - 28.0f) / 10.0f), wl = 1.0f - smooth01((a2 - (BW + 9.0f)) / 5.0f);   /* part 2: wider, and a flat run-in beside the bed before the step */
+                    wl *= smooth01((a2 - BW - 0.6f) / 3.5f);   /* part 2: its inner side a slope down to the bed, not a sheer drop (the ute tipped off it) */
+                    h += (hl - h) * ws * wl;
+                    if (ws * wl > 0.5f && sf != SURF_WATER) sf = up > 0.03f && up < 0.97f && cn.s < R->ck_fall_s ? SURF_ROCK : SURF_BED;
+                }
+                /* round each log jam and each fallen tree right across: a bench on its open side. Build D: raised creek_bench_h
+                 * over the bed, with steep rocky ramps at its ends (Low Range) */
+                for (int jm = 0; jm < R->ck_nbyp; jm++) {
+                    if (R->ck_byp_kind[jm] == 2) continue;
+                    float js = R->ck_byp_s[jm], ds = fabsf(cn.s - js);
+                    if (ds > 32.0f || cn.lat * (float)R->ck_byp_side[jm] <= 0 || a2 < BW) continue;
+                    float rise = 1.0f - smooth01((ds - 20.0f) / T.creek_ramp);
+                    float hl = route_creek_bed(R, cn.s) + 0.2f + R->ck_byp_h[jm] * rise, ws = 1.0f - smooth01((ds - 20.0f - T.creek_ramp) / 5.0f), wl = 1.0f - smooth01((a2 - (BW + 6.5f)) / 5.0f);
+                    h += (hl - h) * ws * wl;
+                    if (ws * wl > 0.5f && sf != SURF_WATER) sf = rise > 0.03f && rise < 0.97f ? SURF_ROCK : SURF_BED;
+                }
+                if (R->explore && R->ck_nbit) {   /* build D, part 2: the creek's things to drive over */
+                    float bump = route_creek_bump(R, x, z);
+                    if (bump > 0.0f) { h += bump; if (bump > 0.06f && sf != SURF_WATER) sf = SURF_ROCK; }
+                }
+                /* build D: the rock gardens: rocks humped across the bed */
+                for (int g = 0; g < R->ck_nrock; g++) {
+                    if (cn.s < R->ck_rock_s0[g] - 3.0f || cn.s > R->ck_rock_s1[g] + 3.0f || a2 > BW + 2.5f) continue;
+                    float bump = 0;
+                    for (int q = R->ck_hump_first[g]; q < R->ck_hump_first[g + 1]; q++) {
+                        const float *hq = R->ck_hump + 4 * q; float dx = x - hq[0], dz = z - hq[1], d2 = dx * dx + dz * dz, r2 = hq[2] * hq[2];
+                        if (d2 < r2) { float u = 1.0f - d2 / r2; bump = fmaxf(bump, hq[3] * u * u); }
+                    }
+                    h += bump;
+                    if (cn.s > R->ck_rock_s0[g] && cn.s < R->ck_rock_s1[g] && a2 < BW + 1.2f) sf = SURF_ROCK;
+                }
+            }
+        }
+    }
     /* build B: the map's edge, a cut bank rising out of the bush (uneven along its length so it reads as ground) */
-    if (sf == SURF_ROUGH) {
+    if (sf == SURF_ROUGH || sf == SURF_BED || sf == SURF_WATER || sf == SURF_ROCK) {
         float e = route_edge(R, n, x, z);
         if (e > -2.0f) {
             float wob = 0.8f + 0.4f * vnoise(x / 23.0f, z / 23.0f);
@@ -574,6 +1066,25 @@ static void assign_cells(Route *R)
             if (o >= 0) { float cx, cz, r; route_chunk_centre(R, o, &cx, &cz, &r); r = hypotf(x - cx, z - cz) + R->cell; if (r > R->chunk_r[o]) R->chunk_r[o] = r; }
         }
     free(near);
+    if (R->ck_n > 1) {   /* build C: the creek way's strip, past the road's and the clearing's own cells: its own chunks */
+        int reach2 = (int)(48.0f / R->cell) + 1;
+        unsigned char *cand = calloc((size_t)ncx * ncz, 1);
+        for (int i = 0; i < R->ck_n; i += 2) {
+            if ((float)i * RT_DS < R->ck_exit_s - 60.0f) continue;
+            int ci = (int)((R->ck_x[i] - R->gx0) / R->cell), cj = (int)((R->ck_z[i] - R->gz0) / R->cell);
+            for (int j = cj - reach2; j <= cj + reach2; j++) for (int q = ci - reach2; q <= ci + reach2; q++) if (q >= 0 && j >= 0 && q < ncx && j < ncz) cand[(size_t)j * ncx + q] = 1;
+        }
+        for (int k = 0; k < ncx * ncz; k++) {
+            if (!cand[k] || R->owner[k] >= 0) continue;
+            float x = R->gx0 + ((float)(k % ncx) + 0.5f) * R->cell, z = R->gz0 + ((float)(k / ncx) + 0.5f) * R->cell;
+            RtNear cn = route_creek_near(R, x, z);
+            if (cn.dist > route_creek_half(R, cn.s) + T.edge_w + 7.0f || cn.s < R->ck_exit_s - 60.0f) continue;
+            int o = R->nchunks + (int)clampf(floorf(cn.s / (RT_DS * RT_CHUNK)), 0, (float)(R->ck_nch - 1));
+            R->owner[k] = (short)o; cnt[o]++;
+            float cx, cz, r; route_chunk_centre(R, o, &cx, &cz, &r); r = hypotf(x - cx, z - cz) + R->cell; if (r > R->chunk_r[o]) R->chunk_r[o] = r;
+        }
+        free(cand);
+    }
     R->cell_first = calloc(RT_MAX_CHUNKS + 1, sizeof(int));
     for (int c = 0; c < RT_MAX_CHUNKS; c++) R->cell_first[c + 1] = R->cell_first[c] + cnt[c];
     R->cell_list = malloc(sizeof(int) * (size_t)(R->cell_first[RT_MAX_CHUNKS] + 1));
@@ -583,6 +1094,8 @@ static void assign_cells(Route *R)
 }
 
 void route_add_props(Route *R);
+static void place_creek(Route *R);
+static float route_heading_at_creek(const Route *R, float s) { int i = (int)clampf(s / RT_DS, 0, (float)(R->ck_n - 2)); return atan2f(R->ck_z[i + 1] - R->ck_z[i], R->ck_x[i + 1] - R->ck_x[i]); }
 /* ------------------------------------------------------ plant templates (session 3) */
 
 static RtTemplate *tpl; static int ntpl;
@@ -693,6 +1206,207 @@ static void add_gate(Route *R)
     for (int k = c + 1; k <= R->nchunks; k++) R->tree_first[k] += na;
 }
 
+/* Build C, the creek way: where no trunk may stand: the bed and a margin, the way in through the forest's edge, and a lane
+ * round each log jam and the waterfall (the bypass, on the side away from the obstacle). */
+static int creek_keep_clear(const Route *R, float s, float lat)
+{
+    float BW = route_creek_bedw(R, s), a = fabsf(lat);
+    if (a < BW + 2.5f) return 1;
+    if (s > R->ck_exit_s - 45.0f && s < R->ck_exit_s + 45.0f && a < 7.0f) return 1;
+    for (int j = 0; j < R->ck_nbyp; j++) if (R->ck_byp_kind[j] != 2 && fabsf(s - R->ck_byp_s[j]) < 28.0f && lat * (float)R->ck_byp_side[j] > 0 && a < BW + 10.0f) return 1;
+    if (R->ck_fall_s > 0 && fabsf(s - R->ck_fall_s) < 34.0f && lat * (float)R->ck_fall_side > 0 && a < BW + 11.0f) return 1;
+    if (R->camp_on && fabsf(s - R->camp_s) < 22.0f && lat * (float)R->camp_side > 0 && a < BW + 16.0f) return 1;   /* build D: the camp's flat */
+    for (int m = 0; m < R->ck_nmark; m++) if (fabsf(s - R->ck_mark_s[m]) < 5.0f) return 1;   /* and room round each marker */
+    return 0;
+}
+static void tl_post(TreeList *L, float x, float z, float r, int kind)
+{
+    if (L->n == L->cap) { L->cap = L->cap ? L->cap * 2 : 1024; L->t = realloc(L->t, sizeof(RtTree) * (size_t)L->cap); }
+    RtTree *q = &L->t[L->n++]; memset(q, 0, sizeof(*q));
+    q->x = x; q->z = z; q->r = r; q->kind = (unsigned char)kind; q->t0 = q->t1 = -1; q->lat = 99.0f;
+}
+static void tl_prop(TreeList *L, const char *name, int variant, float x, float z, float yaw, float scale, int kind, float lat)
+{
+    int t0 = route_template_find(name, variant, 0); if (t0 < 0) return;
+    uint32_t sd = (uint32_t)(x * 31.0f) ^ (uint32_t)(z * 17.0f);
+    RtTree *t = tl_add(L, x, z, t0, kind, &sd, lat);
+    if (t) { t->yaw = yaw; t->scale = scale; t->h = tpl[t0].h * scale; t->r = kind == 0 ? tpl[t0].r * scale : 0; if (lat > 98.0f) t->t1 = (short)t0; }
+}
+/* Part 2: the creek's many small things (stones, twigs, branches) drawn like the ground plants: full detail only near
+ * (their simpler model further off), not as always-full props */
+static void small_bit(TreeList *L, const char *name, const struct RtBit *q, float scale)
+{
+    int t0 = route_template_find(name, q->var, 0); if (t0 < 0) return;
+    uint32_t sd = (uint32_t)(q->x * 13.0f) ^ (uint32_t)(q->z * 7.0f);
+    RtTree *t = tl_add(L, q->x, q->z, t0, 4, &sd, 10.0f);
+    if (t) { t->yaw = q->yaw; t->scale = scale; t->h = tpl[t0].h * scale; }
+}
+/* The creek way's bush, chunk by chunk along it: tall gums back from the water, tree ferns, blackwood and the silver gully
+ * trees on the flats and banks, shield ferns and Lomandra by the water; its own bank with a row of trunks and thick scrub;
+ * two log jams and the waterfall's rocks; firewood lying on the flats; and at the way in, the tells. */
+static void place_creek(Route *R)
+{
+    TreeList L = { R->tree, R->ntree, R->ntree };
+    int *bit_chunk = malloc(sizeof(int) * (size_t)(R->ck_nbit > 0 ? R->ck_nbit : 1));   /* part 2: the chunk each of the creek's things is drawn in */
+    for (int b = 0; b < R->ck_nbit; b++) { RtNear bn = route_creek_near(R, R->ck_bit[b].x, R->ck_bit[b].z); bit_chunk[b] = (int)clampf(floorf(bn.s / (RT_DS * RT_CHUNK)), 0, (float)(R->ck_nch - 1)); }
+    int ncx = R->gx - 1, nlogs = 0;
+    float tell_s = R->ck_exit_s - 8.0f; int tell_c = (int)clampf(floorf(tell_s / (RT_DS * RT_CHUNK)), 0, (float)(R->ck_nch - 1));
+    { float hd = route_heading_at_creek(R, tell_s), cx, cz; route_creek_point(R, tell_s, &cx, &cz);
+      R->tell_x = cx - sinf(hd) * 6.3f; R->tell_z = cz + cosf(hd) * 6.3f; R->tell_yaw = -(hd + (float)M_PI);   /* the blaze (the model's +x) turned back to the clearing */
+      R->post_x = cx + sinf(hd) * 5.6f; R->post_z = cz - cosf(hd) * 5.6f; R->post_yaw = -(hd + 0.5f); }
+    for (int c = 0; c < R->ck_nch; c++) {
+        int idx = R->nchunks + c;
+        R->tree_first[idx] = L.n;
+        if (c == tell_c) {   /* the way in's tells, soft (they're only drawn in Explorer, so they mustn't stop a Drift ute unseen) */
+            tl_prop(&L, "tell", 0, R->tell_x, R->tell_z, R->tell_yaw, 1.0f, 2, 99.0f);
+            tl_prop(&L, "tell", 1, R->post_x, R->post_z, R->post_yaw, 1.0f, 2, 99.0f);
+            for (int q = 0; q < 14; q++) {   /* a screen of thick scrub across the mouth: soft, the ute pushes through it */
+                float ss = R->ck_exit_s - 2.0f + 4.0f * (float)(q % 2) + 1.5f * vnoise((float)q, 1.0f), lat = -6.5f + 13.0f * (float)(q / 2) / 6.0f + (vnoise((float)q, 5.0f) - 0.5f) * 1.5f;
+                float hd = route_heading_at_creek(R, ss), cx, cz; route_creek_point(R, ss, &cx, &cz);
+                uint32_t sd = 4242u + (uint32_t)q; int t0 = tsel("edgescrub", &sd, 3, 0);
+                RtTree *t = tl_add(&L, cx - sinf(hd) * lat, cz + cosf(hd) * lat, t0, 2, &sd, fabsf(lat));
+                if (t) t->scale = 0.8f + 0.25f * vnoise((float)q, 9.0f);
+            }
+            /* build D: the thicket wrapping both banks where the creek leaves the clearing: scrub thick on the bank's face all
+             * round (soft, but the bank behind it holds the ute), and a line of trunks along its top */
+            float a0 = R->ck_exit_s - T.creek_wall_from;
+            uint32_t ws = 6060u; int nth = 0;
+            for (float ss = a0 - 18.0f; ss < R->ck_exit_s + 70.0f; ss += 2.6f)
+                for (float lat = -48.0f; lat <= 48.0f; lat += 2.6f) {
+                    float jx = (rnd(&ws) - 0.5f) * 1.8f, jl = (rnd(&ws) - 0.5f) * 1.8f, roll = rnd(&ws);
+                    float hd = route_heading_at_creek(R, ss + jx), cx, cz; route_creek_point(R, ss + jx, &cx, &cz);
+                    float l2 = lat + jl, px = cx - sinf(hd) * l2, pz = cz + cosf(hd) * l2;
+                    RtNear c2 = route_creek_near(R, px, pz);
+                    if (c2.s < a0 - 16.0f || c2.dist < 4.6f) continue;
+                    float ramp = 30.0f * (1.0f - smooth01((c2.s - (a0 - 16.0f)) / 16.0f)), wv = creek_chan_e(R, c2.s, c2.dist) - ramp;
+                    float k = fmaxf(creek_chan_e(R, c2.s, c2.dist + 1.0f) - creek_chan_e(R, c2.s, c2.dist), 0.3f), wm = wv / k;   /* metres into the wall */
+                    if (wv < 0.3f || wm > 13.0f) continue;
+                    if (wm < 8.5f && roll < 0.88f) {
+                        uint32_t sd = 7070u + (uint32_t)nth * 31u; int t0 = tsel("edgescrub", &sd, 3, 0);
+                        RtTree *t = tl_add(&L, px, pz, t0, 2, &sd, 99.0f); if (t) t->scale = 0.85f + 0.3f * rnd(&ws);
+                        nth++;
+                    } else if (wm >= 8.5f && roll < 0.35f) {
+                        uint32_t sd = 7171u + (uint32_t)nth * 37u; int t0 = tsel(roll < 0.17f ? "greygum" : "blackwood", &sd, 3, 0);
+                        tl_add(&L, px, pz, t0, 2, &sd, 99.0f); nth++;   /* soft: they stand in Drift's clearing too, unseen (the bank holds the ute in Explorer) */
+                    }
+                }
+            fprintf(stderr, "route: the thicket round the way in: %d plants\n", nth);
+        }
+        for (int q = R->cell_first[idx]; q < R->cell_first[idx + 1]; q++) {
+            int k = R->cell_list[q], i = k % ncx, j = k / ncx;
+            uint32_t sd = hash32((uint32_t)k * 2246822519U + 777U);
+            for (int draw = 0; draw < 9; draw++) {
+                float x = R->gx0 + ((float)i + rnd(&sd)) * R->cell, z = R->gz0 + ((float)j + rnd(&sd)) * R->cell, roll = rnd(&sd), r2 = rnd(&sd);
+                RtNear cn = route_creek_near(R, x, z);
+                if (cn.dist > 150.0f) continue;
+                float BW = route_creek_bedw(R, cn.s), a = cn.dist, e = a - route_creek_half(R, cn.s);
+                int t0 = -1, kind = 2;
+                if (e > T.edge_w + 5.0f) continue;
+                if (draw == 0) {   /* tall gums, back from the water */
+                    if (a > BW + 6.0f && e < T.edge_stop && roll < 0.30f) { t0 = tsel(r2 < 0.45f ? "greygum" : r2 < 0.75f ? "brownbarrel" : "messmate", &sd, 3, 1); kind = 0; }
+                } else if (draw == 1) {   /* tree ferns: the wet gully */
+                    if (a > BW + 2.5f && a < BW + 18.0f && e < T.edge_stop && roll < 0.30f) { t0 = tsel(r2 < 0.5f ? "softfern" : "roughfern", &sd, 3, 0); kind = 0; }
+                } else if (draw == 2) {   /* blackwood and the silver gully trees */
+                    if (a > BW + 3.0f && e < T.edge_stop && roll < 0.22f) { if (r2 < 0.5f) { t0 = tsel("blackwood", &sd, 3, 0); kind = 0; } else t0 = tsel("gullytree", &sd, 3, 0); }
+                } else if (draw == 7) {   /* the bank's row of trunks */
+                    if (e > T.edge_stop + 2.0f && roll < T.edge_trees) { t0 = tsel(r2 < 0.5f ? "greygum" : "blackwood", &sd, 3, 0); kind = 0; }
+                } else if (draw == 8) {   /* and its scrub (build D: thicker, and down onto the banks by the bed: drive-through, but tight) */
+                    if (e > -4.0f && roll < 0.9f * T.edge_scrub) t0 = tsel("edgescrub", &sd, 3, 0);
+                    else if (cn.s > R->ck_exit_s + 60.0f && a > BW + 1.5f && roll < T.creek_scrub && !creek_keep_clear(R, cn.s, cn.lat)) t0 = tsel("edgescrub", &sd, 3, 0);   /* not on the climb-outs */
+                } else {   /* the ground layer: ferns and Lomandra by the water, bracken and litter further up */
+                    if (a < BW * 0.8f) continue;   /* the gravel and the water stay bare */
+                    if (roll < 0.7f * T.ground_density) t0 = tsel(a < BW + 4.0f ? (r2 < 0.5f ? "lomandra" : "shieldfern") : r2 < 0.35f ? "shieldfern" : r2 < 0.6f ? "bracken" : r2 < 0.8f ? "litter" : "lomandra", &sd, 3, 0);
+                }
+                if (t0 < 0) continue;
+                if (kind == 0 && creek_keep_clear(R, cn.s, cn.lat)) continue;
+                if (kind == 0 && fabsf(route_near(R, x, z).lat) < route_half_width() + T.verge_w + T.ditch_w + 1.0f) continue;   /* off the road at the ford */
+                tl_add(&L, x, z, t0, kind, &sd, fminf(a, 97.0f));
+            }
+        }
+        /* this chunk's obstacles and firewood */
+        float s0 = (float)(c * RT_CHUNK) * RT_DS, s1 = s0 + RT_CHUNK * RT_DS;
+        /* build D, part 2: the creek's things, drawn on their bumps (nothing here is solid: the ute drives over them) */
+        for (int b = 0; b < R->ck_nbit; b++) {
+            if (bit_chunk[b] != c) continue;
+            const struct RtBit *q = &R->ck_bit[b];
+            switch (q->type) {
+            case BIT_STONE: small_bit(&L, "creekrock", q, q->r / (q->var == 0 ? 0.35f : q->var == 1 ? 0.5f : 0.7f) * 1.1f); break;
+            case BIT_BOULDER: tl_prop(&L, "boulder", q->var, q->x, q->z, q->yaw, q->r / (q->var == 0 ? 0.7f : 1.0f), 4, 99.0f); break;
+            case BIT_STUMP: tl_prop(&L, "stump", q->var, q->x, q->z, q->yaw, q->r / 0.4f, 4, 99.0f); break;
+            case BIT_BRANCH: small_bit(&L, "branch", q, 1.0f); break;
+            case BIT_SMALLLOG: tl_prop(&L, "smalllog", q->var, q->x, q->z, q->yaw, q->r / (q->var ? 0.16f : 0.2f), 4, 99.0f); break;
+            case BIT_MOSSY: tl_prop(&L, "deadfall", q->var, q->x, q->z, q->yaw, q->h, 4, 99.0f); break;
+            case BIT_TWIGS: small_bit(&L, "twigs", q, 1.0f); break;
+            }
+        }
+        /* build D: the stock route's markers (part 2: drawn only, nothing solid) */
+        for (int m = 0; m < R->ck_nmark; m++) {
+            if (R->ck_mark_s[m] < s0 || R->ck_mark_s[m] >= s1) continue;
+            tl_prop(&L, "marker", R->ck_mark_v[m], R->ck_mark_x[m], R->ck_mark_z[m], R->ck_mark_yaw[m], 1.3f, 4, 99.0f);   /* a little larger than life, to be seen from the way down */
+        }
+        /* build D: the cattleman's camp: the fireplace (solid stones) and the trunk (drawn by the game: it opens) */
+        if (R->camp_on && R->camp_s >= s0 && R->camp_s < s1) {
+            tl_prop(&L, "camp", 0, R->camp_x, R->camp_z, R->camp_yaw, 1.0f, 4, 99.0f);   /* part 2: drawn only (drive over its low stones) */
+        }
+        for (float ls = ceilf((s0 - 60.0f) / 340.0f) * 340.0f + 60.0f; ls < s1; ls += 340.0f) {   /* firewood on the flats, about one every 340 m */
+            if (ls < R->ck_exit_s + 80.0f || ls > R->ck_len - 60.0f) continue;
+            /* build D: where build C had them (the bed's old width), so Drift's log bot (which sees every log) is unchanged */
+            float BW = 3.0f + 3.0f * vnoise(ls / 140.0f, 4.0f), hd = route_heading_at_creek(R, ls), side = ((int)(ls / 340.0f) & 1) ? 1.0f : -1.0f, cx, cz;
+            route_creek_point(R, ls, &cx, &cz);
+            float lat = side * (BW + 3.5f), lx = cx - sinf(hd) * lat, lz = cz + cosf(hd) * lat;
+            int tl = route_template_find("log", 2, 0); if (tl < 0) tl = route_template_find("log", 0, 0);
+            if (tl < 0) continue;
+            uint32_t sd = (uint32_t)ls; RtTree *t = tl_add(&L, lx, lz, tl, 2, &sd, BW + 3.5f);
+            if (!t) continue;
+            t->yaw = hd + 0.2f * side; t->wood = 1; t->scale = 1.0f;
+            float half = 0.5f * 4.5f, rad = 0.25f, cxl = cosf(t->yaw), czl = sinf(t->yaw);
+            int m = (int)(2.0f * half / (rad * 1.2f)) + 1;
+            for (int q2 = 0; q2 <= m; q2++) { float f = -half + 2.0f * half * (float)q2 / (float)m; tl_post(&L, lx + cxl * f, lz + czl * f, rad, 5); L.t[L.n - 1].wood = 1; }
+            nlogs++;
+        }
+    }
+    R->tree_first[R->nchunks + R->ck_nch] = L.n;
+    R->tree = L.t; R->ntree = L.n;
+    R->wood_creek = nlogs; R->nwood += nlogs;
+    free(bit_chunk);
+}
+
+/* Build C: the firewood. Drift keeps every log (they splinter and come back each run); Explorer's logs don't come back, so
+ * the level 3 fire takes roaming. One log in each wood_every metres of road (the one with most room round it, near the
+ * road: the play test wanted them easy to find), a few more near the bridge, and any lying in the hut's clearing. Marked wood = 1 with
+ * their posts. */
+static void pick_firewood(Route *R)
+{
+    float every = fmaxf(T.wood_every, 50.0f);
+    int nb = (int)(R->length / every) + 1, *best = malloc(sizeof(int) * (size_t)nb), tl = route_template_find("log", 0, 0);
+    float *bl = malloc(sizeof(float) * (size_t)nb);
+    for (int b = 0; b < nb; b++) { best[b] = -1; bl[b] = -1; }
+    R->nwood = R->wood_clearing = R->wood_road = R->wood_creek = R->wood_bridge = 0;
+    int bridge_n = 0;
+    for (int k = 0; k < R->ntree; k++) {
+        RtTree *t = &R->tree[k];
+        if (t->t0 < 0 || strcmp(tpl[t->t0].name, "log")) continue;
+        (void)tl;
+        RtNear n = route_near(R, t->x, t->z);
+        if (route_in_clearing(R, t->x, t->z)) { t->wood = 1; R->wood_clearing++; continue; }
+        if (R->bridge_s0 > 0 && n.s > R->bridge_s0 - 400.0f && fabsf(n.lat) > 12.0f && bridge_n < (int)T.wood_bridge && (int)(n.s / 80.0f) % 2 == 0) {
+            int dup = 0; for (int q = 0; q < k; q++) if (R->tree[q].wood && R->tree[q].t0 >= 0 && hypotf(R->tree[q].x - t->x, R->tree[q].z - t->z) < 60.0f) dup = 1;
+            if (!dup) { t->wood = 1; bridge_n++; R->wood_bridge++; continue; }
+        }
+        int b = (int)clampf(n.s / every, 0, (float)(nb - 1));
+        if (fabsf(n.lat) < 6.0f || fabsf(n.lat) > 26.0f) continue;   /* off the road, but not deep in the bush (play test: easy to see from it) */
+        int crowd = 0;   /* the one in each stretch with the most room round it (fewest trunks within 5 m) */
+        for (int q = k - 400 > 0 ? k - 400 : 0; q < k + 400 && q < R->ntree; q++) if (R->tree[q].kind == 0 && hypotf(R->tree[q].x - t->x, R->tree[q].z - t->z) < 5.0f) crowd++;
+        float score = 100.0f - (float)crowd * 10.0f - fabsf(n.lat) * 0.3f;   /* room round it, and near the road */
+        if (score > bl[b]) { bl[b] = score; best[b] = k; }
+    }
+    for (int b = 0; b < nb; b++) if (best[b] >= 0 && !R->tree[best[b]].wood) { R->tree[best[b]].wood = 1; R->wood_road++; }
+    for (int k = 0; k < R->ntree; k++)   /* the posts take their log's mark */
+        if (R->tree[k].kind == 5) { int q = k; while (q > 0 && R->tree[q].kind == 5) q--; R->tree[k].wood = R->tree[q].wood; }
+    R->nwood = R->wood_clearing + R->wood_road + R->wood_bridge;
+    free(best); free(bl);
+}
+
 /* Trees: per 5 m cell, by how wooded the imagery says it is and where along the road it is. Open frost-hollow
  * grass round the hut with a snow gum fringe and a hard forest edge; tall gums with a midstorey and a ground layer
  * along the track; tree ferns and gully trees near the creeks. Trunks stay out past the ditch; soft plants may
@@ -785,6 +1499,10 @@ static void place_trees(Route *R)
                     }
                 }
                 if (t0 < 0) continue;
+                if (R->ck_n > 1 && (kind == 0 || draw == 8 || !strcmp(tpl[t0].name, "log"))) {   /* build C: keep the creek way clear */
+                    RtNear cn = route_creek_near(R, x, z);
+                    if (cn.dist < 80.0f && cn.s > R->ck_exit_s - 40.0f && (creek_keep_clear(R, cn.s, cn.lat) || ((draw == 8 || draw == 9) && cn.dist < route_creek_half(R, cn.s) + T.edge_stop + 3.0f))) continue;
+                }
                 const RtTemplate *tt = &tpl[t0];
                 int is_log = !strcmp(tt->name, "log"), is_litter = !strcmp(tt->name, "litter");
                 float keep = kind == 0 ? e2 + tt->r * 1.6f + 0.5f : is_log ? e2 + 2.5f : is_litter ? W + 0.3f : e1 - 0.2f;
@@ -823,8 +1541,10 @@ static void place_trees(Route *R)
     }
     R->tree_first[R->nchunks] = L.n;
     R->tree = L.t; R->ntree = L.n;
+    pick_firewood(R);
     add_gate(R);
     route_add_props(R);
+    if (R->ck_n > 1) place_creek(R);   /* build C: the creek way's bush, its obstacles and its firewood, in its own chunks */
     /* by cell, for collisions: trunks, posts and the hut's walls */
     int ncz = R->gy - 1, nc = ncx * ncz;
     free(R->tcell_first); free(R->tcell_list);
@@ -879,7 +1599,7 @@ static void prop_at(Route *R, TreeList *L, const char *name, float e, float n, f
     t->yaw = yaw; t->scale = 1.0f; t->h = tpl[t0].h; t->r = r; t->t1 = (short)t0;
     /* session 3b (the author): bollards, fence posts and the hitching rail's posts are hard, like trunks: a solid post
      * stops the ute and ends the run if hit faster than tree_min_speed */
-    if (!strcmp(name, "bollard")) solid_post(R, L, e, n, 0.16f);
+    if (!strcmp(name, "bollard")) solid_post(R, L, e, n, BOLLARD_R);
     else if (!strcmp(name, "fencepost")) solid_post(R, L, e, n, 0.11f);
     else if (!strcmp(name, "rail")) { solid_post(R, L, e - cosf(yaw) * 1.3f, n - sinf(yaw) * 1.3f, 0.12f); solid_post(R, L, e + cosf(yaw) * 1.3f, n + sinf(yaw) * 1.3f, 0.12f); }
 }
@@ -923,22 +1643,30 @@ void route_add_props(Route *R)
           if (t) { t->scale = bw[k][3]; t->h = tpl[t0].h * bw[k][3]; t->r = tpl[t0].r * bw[k][3]; } } }
     /* bollards both sides of the track past the hut (every 2.4 m), the NPWS sign at the approach, an old fence line
      * running east across the paddock from the verandah */
-    float W = route_half_width(), off = W + T.verge_w + T.ditch_w + 0.9f;
-    for (float s = 0.0f; s < 90.0f; s += 2.4f) {
-        float x, z; route_point(R, s, &x, &z);
-        float hd = route_heading_at(R, s), lx = -sinf(hd), lz = cosf(hd);
-        for (int side = -1; side <= 1; side += 2) {
-            if (side < 0 && s < 16.0f) continue;      /* the north row runs from the car park; the south one starts later */
-            float bx = x + lx * off * (float)side, bz = z + lz * off * (float)side;
-            if ((side < 0 && hypotf(bx - R->pad_x, bz - R->pad_z) < R->pad_r + 1.5f) || hypotf(bx - R->hut_x, bz - R->hut_z) < 7.0f) continue;
+    /* build C (the author, 21 Oct): bollards only right beside the track, a row along each edge, and none by the car park
+     * or round the day-use spot. They stand bollard_gap apart, face to face: a little wider than the ute at its mirrors,
+     * so it can just drive out between two, straight. */
+    float W = route_half_width(), off = W + T.verge_w + T.ditch_w + 0.9f, step = fmaxf(T.bollard_gap, 1.0f) + 2.0f * BOLLARD_R;
+    float boff = W + T.verge_w + T.ditch_w + 1.6f;   /* just past where prop_at would nudge them to anyway */
+    float placed[128][2]; int nplaced = 0;
+    for (int side = -1; side <= 1; side += 2) {   /* walked along each row's own line, so the spacing holds round the bends */
+        float run = step, px = 0, pz = 0; int have = 0;
+        for (float s = 0.0f; s < 90.0f; s += 0.05f) {
+            float x, z; route_point(R, s, &x, &z);
+            float hd = route_heading_at(R, s), bx = x - sinf(hd) * boff * (float)side, bz = z + cosf(hd) * boff * (float)side;
+            if (have) run += hypotf(bx - px, bz - pz);
+            px = bx; pz = bz; have = 1;
+            if (run < step) continue;
+            RtNear nb = route_near(R, bx, bz);
+            if (fabsf(nb.lat) < boff - 0.3f) continue;   /* the inside of the hairpin, where the line folds back near the road */
+            if (hypotf(bx - R->pad_x, bz - R->pad_z) < R->pad_r + 8.0f || hypotf(bx - R->hut_x, bz - R->hut_z) < 7.0f) continue;
+            int close = 0;
+            for (int k = 0; k < nplaced; k++) if (hypotf(placed[k][0] - bx, placed[k][1] - bz) < step - 0.02f) close = 1;
+            if (close) continue;
+            if (nplaced < 128) { placed[nplaced][0] = bx; placed[nplaced][1] = bz; nplaced++; }
             prop_at(R, &L, "bollard", bx - R->hut_x, bz - R->hut_z, (float)side, 4, 0);   /* hard posts (session 3b): prop_at adds the solid core */
+            run = 0;
         }
-    }
-    for (int k = 0; k < 10; k++) {                                    /* bollards round the day-use spot */
-        float a = 1.2f + (float)k * 0.42f, bx = -8.5f + 7.5f * cosf(a), bz = 10.0f + 7.5f * sinf(a);
-        RtNear nn = route_near(R, R->hut_x + bx, R->hut_z + bz);
-        if (fabsf(nn.lat) < off || hypotf(bx, bz) < 8.0f) continue;
-        prop_at(R, &L, "bollard", bx, bz, (float)k, 4, 0);
     }
     { float x, z; route_point(R, 34.0f, &x, &z); float hd = route_heading_at(R, 34.0f);
       prop_at(R, &L, "sign", x - sinf(hd) * (off + 0.8f) - R->hut_x, z + cosf(hd) * (off + 0.8f) - R->hut_z, (float)(M_PI / 2) - hd, 4, 0); }
@@ -966,6 +1694,24 @@ void route_add_props(Route *R)
     R->tree = L.t; R->ntree = L.n;
 }
 
+/* Build C: the ute's own shape for posts (bollards, fence posts, the gate's boom): its half width in slices along it, from
+ * the model, so threading it between two bollards is judged on the real ute (2.05 m at the mirrors, 1.77 m at the tail)
+ * and not on its box. Trunks still use the box. */
+static int post_n; static float post_z0[24], post_z1[24], post_hw[24];
+void route_set_post_outline(int n, const float *z0, const float *z1, const float *hw)
+{
+    post_n = n < 24 ? n : 24;
+    for (int i = 0; i < post_n; i++) { post_z0[i] = z0[i]; post_z1[i] = z1[i]; post_hw[i] = hw[i]; }
+}
+static int post_touch(float lf, float lr, float r)
+{
+    for (int i = 0; i < post_n; i++) {
+        float of = lf > post_z1[i] ? lf - post_z1[i] : (lf < post_z0[i] ? post_z0[i] - lf : 0), orr = fmaxf(fabsf(lr) - post_hw[i], 0);
+        if (of * of + orr * orr < r * r) return 1;
+    }
+    return 0;
+}
+
 int route_tree_hit(const Route *R, float cx, float cz, float yaw, float half_w, float front, float rear)
 {
     int ncx = R->gx - 1, ncz = R->gy - 1;
@@ -978,8 +1724,10 @@ int route_tree_hit(const Route *R, float cx, float cz, float yaw, float half_w, 
             for (int q = R->tcell_first[c]; q < R->tcell_first[c + 1]; q++) {
                 const RtTree *t = &R->tree[R->tcell_list[q]];
                 if (t->kind == 6) continue;   /* a broken log's posts */
+                if (t->kind == 5 && R->explore && !t->wood) continue;   /* build C: not there in Explorer */
                 float dx = t->x - cx, dz = t->z - cz;
                 float lf = dx * fx + dz * fz, lr = dx * rx + dz * rz;
+                if (post_n > 0 && t->kind == 3 && t->r <= 0.2f) { if (post_touch(lf, lr, t->r)) return R->tcell_list[q]; continue; }
                 float of = lf > front ? lf - front : (lf < rear ? rear - lf : 0), orr = fmaxf(fabsf(lr) - half_w, 0);
                 if (of * of + orr * orr < t->r * t->r) return R->tcell_list[q];
             }
@@ -987,8 +1735,19 @@ int route_tree_hit(const Route *R, float cx, float cz, float yaw, float half_w, 
     return -1;
 }
 
+#define CREEK_REACH 40.0f   /* the creek way's ground is built this far from its line (more where its strip is wider) */
+static void creek_chunk_span(const Route *R, int index, int *i0, int *i1) { *i0 = (index - R->nchunks) * RT_CHUNK; *i1 = *i0 + RT_CHUNK; if (*i1 > R->ck_n - 1) *i1 = R->ck_n - 1; }
 void route_chunk_centre(const Route *R, int index, float *x, float *z, float *radius)
 {
+    if (index >= R->nchunks) {   /* build C: a creek way chunk */
+        int i0, i1; creek_chunk_span(R, index, &i0, &i1);
+        float sx = 0, sz = 0; int k = 0;
+        for (int i = i0; i <= i1; i++) { sx += R->ck_x[i]; sz += R->ck_z[i]; k++; }
+        sx /= (float)k; sz /= (float)k;
+        float r = 0; for (int i = i0; i <= i1; i++) r = fmaxf(r, hypotf(R->ck_x[i] - sx, R->ck_z[i] - sz));
+        *x = sx; *z = sz; *radius = fmaxf(r + CREEK_REACH, R->chunk_r[index]);
+        return;
+    }
     int i0 = index * RT_CHUNK, i1 = i0 + RT_CHUNK; if (i1 > R->n - 1) i1 = R->n - 1;
     float sx = 0, sz = 0; int k = 0;
     for (int i = i0; i <= i1; i++) { sx += R->x[i]; sz += R->z[i]; k++; }
@@ -999,6 +1758,7 @@ void route_chunk_centre(const Route *R, int index, float *x, float *z, float *ra
 }
 float route_chunk_line_r(const Route *R, int index)   /* build B: the chunk's own stretch of road (its full radius can take in the hut's clearing) */
 {
+    if (index >= R->nchunks) { float x, z, r; route_chunk_centre(R, index, &x, &z, &r); return fminf(r, 60.0f + CREEK_REACH); }
     int i0 = index * RT_CHUNK, i1 = i0 + RT_CHUNK; if (i1 > R->n - 1) i1 = R->n - 1;
     float sx = 0, sz = 0; int k = 0;
     for (int i = i0; i <= i1; i++) { sx += R->x[i]; sz += R->z[i]; k++; }
@@ -1042,6 +1802,31 @@ int route_load(Route *R, const char *dir)
     for (size_t k = 0; k < N; k++) { R->known[k] = isfinite(R->dem[k]); R->dem[k] = isfinite(R->dem[k]) ? R->dem[k] - R->elev0 : 0.0f; }
     for (size_t k = 0; k < N; k++) if (!R->known[k] && farcov && isfinite(R->hdem_far_tmp[k])) R->dem[k] = R->hdem_far_tmp[k] - R->elev0;
     free(R->hdem_far_tmp); R->hdem_far_tmp = NULL;
+    if (read_creek(R, dir)) {   /* build C: the creek way, and its 5 m DEM where the road's has none, blended in over its last 25 m */
+        for (int i = 0; i < R->ck_n; i++) R->ck_bed[i] -= R->elev0;
+        char cp[512]; snprintf(cp, sizeof(cp), "%s/creek_dem.bin", dir);
+        FILE *f = fopen(cp, "rb"); char mg[4]; int32_t cnx, cny; float cx0, cy0, cc;
+        if (f && fread(mg, 1, 4, f) == 4 && !memcmp(mg, "BDT1", 4) && fread(&cnx, 4, 1, f) == 1 && fread(&cny, 4, 1, f) == 1 && fread(&cx0, 4, 1, f) == 1 && fread(&cy0, 4, 1, f) == 1 && fread(&cc, 4, 1, f) == 1 && cnx > 0 && cny > 0) {
+            float *cd = malloc(sizeof(float) * (size_t)cnx * cny);
+            if (fread(cd, sizeof(float), (size_t)cnx * cny, f) == (size_t)cnx * cny) {
+                int merged = 0;
+                for (int j = 0; j < cny; j++) for (int i = 0; i < cnx; i++) {
+                    float v = cd[(size_t)j * cnx + i]; if (!isfinite(v)) continue;
+                    float x = cx0 + (float)i * cc, z = cy0 + (float)j * cc;
+                    int gi = (int)roundf((x - R->gx0) / R->cell), gj = (int)roundf((z - R->gz0) / R->cell);
+                    if (gi < 0 || gj < 0 || gi >= R->gx || gj >= R->gy) continue;
+                    size_t k = (size_t)gj * R->gx + gi;
+                    if (R->known[k]) continue;
+                    float d = route_creek_near(R, x, z).dist, w = 1.0f - smooth01((d - 62.0f) / 25.0f);
+                    R->dem[k] += (v - R->elev0 - R->dem[k]) * w; merged++;
+                }
+                fprintf(stderr, "route: the creek way, %.0f m, %d chunks; its DEM in %d grid points\n", R->ck_len, R->ck_nch, merged);
+            }
+            free(cd);
+        }
+        if (f) fclose(f);
+        if (R->nchunks + R->ck_nch > RT_MAX_CHUNKS) { fprintf(stderr, "route: too many chunks with the creek way: it's left out\n"); R->ck_n = 0; R->ck_nch = 0; }
+    }
     if (!pad_h_given) R->pad_h = 0;
     if (R->bridge_s1 <= R->bridge_s0) R->bridge_s0 = R->bridge_s1 = 0;
     if (meta < 2) { R->start_x = R->x[3]; R->start_z = R->z[3]; R->start_yaw = (float)(M_PI / 2) - R->head[3]; }
@@ -1050,6 +1835,7 @@ int route_load(Route *R, const char *dir)
     }
     R->nchunks = (R->n - 1 + RT_CHUNK - 1) / RT_CHUNK;
     if (R->nchunks > RT_MAX_CHUNKS) { fprintf(stderr, "route: too long (%d chunks)\n", R->nchunks); return 0; }
+    if (R->nchunks + R->ck_nch > RT_MAX_CHUNKS) { fprintf(stderr, "route: too many chunks with the creek way: it's left out\n"); R->ck_n = 0; R->ck_nch = 0; }
     build_buckets(R);
     /* the ford's water: where the dipped road lies below the level */
     if (R->ford_s > 0) {
@@ -1063,18 +1849,112 @@ int route_load(Route *R, const char *dir)
     build_spur(R);
     build_hollow(R, farcov);
     free(farcov);
+    if (R->ck_n > 1) {
+        creek_features(R);
+        /* the bed no steeper than 22 % (0.44 m in 2 m) but at the waterfall: cut down into the ground above each steeper drop */
+        int f0 = (int)((R->ck_fall_s - 10.0f) / RT_DS), f1 = (int)((R->ck_fall_s + 10.0f) / RT_DS), eased = 0;
+        for (int i = R->ck_n - 2; i >= 0; i--) {
+            if (i >= f0 && i <= f1) continue;
+            if (R->ck_bed[i] > R->ck_bed[i + 1] + 0.44f) { R->ck_bed[i] = R->ck_bed[i + 1] + 0.44f; eased++; }
+        }
+        if (eased) fprintf(stderr, "route: the creek bed eased at %d points (no steeper than 22%% but at the waterfall)\n", eased);
+    }
     assign_cells(R);
     place_trees(R);
+    route_place_stags(R);   /* build D */
     R->loaded = 1;
     return 1;
 }
 
 void route_replace_trees(Route *R) { free(R->tree); R->tree = NULL; place_trees(R); }
 
+/* Build D: the stags. 25 to 40 standing dead gums in Explorer's world: along the road strip (14 to 30 m out, mostly not by
+ * the road), round the clearing's edge, and on the creek way's banks. Each gets the way it falls, chosen so it never lands
+ * across the road or the creek's line, with its three logs lying where it lands, all on open, drivable ground. */
+static int stag_open(const Route *R, float x, float z, float room, int creek_ok)
+{
+    if (route_tree_hit(R, x, z, 0, room, room, -room) >= 0) return 0;
+    RtNear n = route_near(R, x, z);
+    if (fabsf(n.lat) < route_half_width() + T.verge_w + T.ditch_w + 3.0f && n.s > -5.0f && n.s < R->length + 5.0f) return 0;   /* never on or by the road */
+    if (route_edge(R, n, x, z) > T.edge_stop - 3.0f) return 0;
+    RtNear c = route_creek_near(R, x, z);
+    if (c.dist < route_creek_bedw(R, c.s) + 1.5f && !creek_ok) return 0;   /* not in the creek's bed */
+    if (c.dist < 30.0f && c.s > R->ck_exit_s - 40.0f && c.s < R->ck_exit_s + 60.0f) return 0;   /* well away from the way in */
+    float gx = route_height(R, x + 1.0f, z, NULL) - route_height(R, x - 1.0f, z, NULL), gz = route_height(R, x, z + 1.0f, NULL) - route_height(R, x, z - 1.0f, NULL);
+    return hypotf(gx, gz) * 0.5f < 0.3f;
+}
+static int stag_try(Route *R, float x, float z, const float *dirs, int ndir, int where, uint32_t *sd)
+{
+    if (R->nstag >= 48 || !stag_open(R, x, z, 2.2f, 0)) return 0;
+    for (int k = 0; k < R->nstag; k++) if (hypotf(R->stag[k].x - x, R->stag[k].z - z) < 40.0f) return 0;
+    if (R->camp_on && hypotf(R->camp_x - x, R->camp_z - z) < 30.0f) return 0;
+    for (int m = 0; m < R->ck_nmark; m++) if (hypotf(R->ck_mark_x[m] - x, R->ck_mark_z[m] - z) < 15.0f) return 0;
+    for (int d = 0; d < ndir; d++) {
+        float a = dirs[d], ok = 1;
+        for (int q = 0; q < 3 && ok; q++) {
+            float l = 2.8f + 3.1f * (float)q, lx = x + cosf(a) * l, lz = z + sinf(a) * l;
+            if (!stag_open(R, lx, lz, 1.0f, 0)) ok = 0;
+            if (where == 2) { RtNear c = route_creek_near(R, lx, lz); if (c.dist < route_creek_bedw(R, c.s) + 1.0f || creek_chan_e(R, c.s, c.dist) > T.edge_stop - 2.5f) ok = 0; }   /* on the bank, short of the hold */
+        }
+        if (!ok) continue;
+        struct RtStag *g = &R->stag[R->nstag++];
+        g->x = x; g->z = z; g->fall = a; g->variant = (int)(rnd(sd) * 3.0f) % 3; g->where = where;
+        g->h = (7.0f + 2.5f * (float)g->variant) * (0.9f + 0.2f * rnd(sd)); g->r = 0.30f + 0.06f * (float)g->variant;
+        g->log_yaw = a + 0.12f * (rnd(sd) - 0.5f);
+        for (int q = 0; q < 3; q++) { float l = 2.8f + 3.1f * (float)q; g->log_x[q] = x + cosf(a) * l + 0.3f * (rnd(sd) - 0.5f); g->log_z[q] = z + sinf(a) * l + 0.3f * (rnd(sd) - 0.5f); }
+        return 1;
+    }
+    return 0;
+}
+void route_place_stags(Route *R)
+{
+    R->nstag = 0;
+    uint32_t sd = 4848u;
+    int keep = R->explore; R->explore = 1;   /* Explorer's world (the creek way open) */
+    /* the road strip: one in each 300 m or so, alternating sides, 14 to 30 m out; falling away from the road, or along it */
+    for (float s0 = 160.0f; s0 < R->length - 150.0f && R->nstag < 26; s0 += 290.0f) {
+        if (R->bridge_s0 > 0 && s0 > R->bridge_s0 - 60.0f) break;
+        for (int t = 0; t < 6; t++) {
+            float s1 = s0 + 40.0f * (float)t, side = ((int)(s0 / 290.0f) + t) & 1 ? 1.0f : -1.0f, lat = side * (14.0f + 16.0f * rnd(&sd)), x, z;
+            if (fabsf(s1 - R->ford_s) < 60.0f || (R->junction_s > 0 && fabsf(s1 - R->junction_s) < 60.0f)) continue;
+            float hd = route_heading_at(R, s1); route_point(R, s1, &x, &z);
+            x -= sinf(hd) * lat; z += cosf(hd) * lat;
+            if (route_in_clearing(R, x, z)) continue;
+            float out = hd + (side > 0 ? (float)M_PI * 0.5f : -(float)M_PI * 0.5f);   /* away from the road (lat + is left of the way) */
+            float dirs[5] = { out, out + 0.5f, out - 0.5f, hd, hd + (float)M_PI };
+            if (stag_try(R, x, z, dirs, 5, 0, &sd)) break;
+        }
+    }
+    /* round the clearing's edge: just into the bush past the open hollow, falling into the bush (or along the edge) */
+    for (int k = 0; k < 32 && R->nstag < 33; k++) {
+        float a = (float)k * 0.196f + 0.3f;
+        for (float rr = 40.0f; rr < 300.0f; rr += 3.0f) {
+            float x = R->hut_x + cosf(a) * rr, z = R->hut_z + sinf(a) * rr, hdist = hut_dist(R, x, z);
+            if (hdist < 1.0f) continue;
+            if (hdist > 15.0f) break;
+            float dirs[4] = { a, a + 0.6f, a - 0.6f, a + 1.57f };
+            if (stag_try(R, x, z, dirs, 4, 1, &sd)) break;
+        }
+    }
+    /* the creek way's banks: falling downstream along the bank, never across the bed */
+    for (float s0 = R->ck_exit_s + 420.0f; s0 < R->ck_len - 300.0f && R->nstag < 40; s0 += 640.0f) {
+        for (int t = 0; t < 5; t++) {
+            float s1 = s0 + 30.0f * (float)t; if (creek_busy(R, s1, 50.0f)) continue;
+            float BW = route_creek_bedw(R, s1), side = t & 1 ? 1.0f : -1.0f, lat = side * (BW + 4.5f), hd = route_heading_at_creek(R, s1), x, z;
+            route_creek_point(R, s1, &x, &z); x -= sinf(hd) * lat; z += cosf(hd) * lat;
+            float dirs[3] = { hd + 0.15f * side, hd - (float)M_PI - 0.15f * side, hd };
+            if (stag_try(R, x, z, dirs, 3, 2, &sd)) break;
+        }
+    }
+    R->explore = keep;
+    int nw[3] = { 0, 0, 0 }; for (int k = 0; k < R->nstag; k++) nw[R->stag[k].where]++;
+    fprintf(stderr, "route: %d stags (road strip %d, clearing edge %d, creek way %d), %d firewood logs in them\n", R->nstag, nw[0], nw[1], nw[2], 3 * R->nstag);
+}
+
 /* Logs that break (follow-up): a log is its drawn tree followed by its hidden posts (kind 5). Hitting a post breaks the
  * log: it stops being drawn and its posts stop being solid (kind 6) until route_logs_restore. Returns the log's chunk. */
 static int broken[4096], nbroken;
-static int chunk_of(const Route *R, int k) { int c = 0; while (c < R->nchunks - 1 && R->tree_first[c + 1] <= k) c++; return c; }
+static int chunk_of(const Route *R, int k) { int c = 0, nt = R->nchunks + R->ck_nch; while (c < nt - 1 && R->tree_first[c + 1] <= k) c++; return c; }
 int route_log_break(Route *R, int post)
 {
     if (post < 0 || post >= R->ntree || R->tree[post].kind != 5) return -1;
@@ -1087,6 +1967,22 @@ int route_log_break(Route *R, int post)
     log->t0 = log->t1 = -1;
     for (int q = k + 1; q < R->ntree && R->tree[q].kind == 5; q++) R->tree[q].kind = 6;
     return chunk_of(R, k);
+}
+int route_log_index(const Route *R, int post)
+{
+    if (post < 0 || post >= R->ntree) return -1;
+    int k = post;
+    while (k > 0 && (R->tree[k].kind == 5 || R->tree[k].kind == 6)) k--;
+    return k;
+}
+int route_log_break_at(Route *R, float x, float z)
+{
+    for (int k = 0; k + 1 < R->ntree; k++) {
+        const RtTree *t = &R->tree[k];
+        if (R->tree[k + 1].kind != 5 || fabsf(t->x - x) > 0.3f || fabsf(t->z - z) > 0.3f || t->t0 < 0) continue;
+        return route_log_break(R, k + 1);
+    }
+    return -1;
 }
 void route_logs_restore(Route *R, void (*changed)(int chunk))
 {
@@ -1197,6 +2093,14 @@ static Col ground_col(const Route *R, float x, float z, float slope)
     }
     float dp = hypotf(x - R->pad_x, z - R->pad_z);
     if (R->pad_r > 0 && dp < R->pad_r + 2.0f) c = cmix(C_PAD, c, smooth01((dp - R->pad_r + 3.0f) / 5.0f));
+    if (R->ck_n > 1) {   /* build C: the creek's gravel bed and its damp, mossy banks */
+        RtNear cn = route_creek_near(R, x, z);
+        if (cn.dist < 20.0f && road_dist(R, route_near(R, x, z)) > 32.0f) {
+            float BW = route_creek_bedw(R, cn.s);
+            Col gravel = cmix(col(0.56f, 0.53f, 0.46f), col(0.46f, 0.44f, 0.40f), nz), damp = cmix(col(0.30f, 0.36f, 0.20f), col(0.36f, 0.40f, 0.22f), nz);
+            c = cmix(cmix(gravel, damp, smooth01((cn.dist - BW + 1.0f) / 2.5f)), c, smooth01((cn.dist - BW - 4.0f) / 6.0f));
+        }
+    }
     return c;
 }
 
@@ -1329,6 +2233,7 @@ static void build_trees(const Route *R, int index, GB *b)
     for (int k = R->tree_first[index]; k < R->tree_first[index + 1]; k++) {
         const RtTree *t = &R->tree[k];
         if (t->t0 < 0) continue;
+        if (R->explore && !t->wood && !strcmp(tpl[t->t0].name, "log")) continue;   /* build C: Explorer has only the firewood */
         float gy = route_height(R, t->x, t->z, NULL);
         const RtTemplate *t0 = &tpl[t->t0];
         int prop = t->lat > 98.0f;   /* the hut's props are at 99 (plants are capped at 97) */
@@ -1444,8 +2349,79 @@ static void build_spur_ribbon(const Route *R, GB *b)
         }
 }
 
+/* Build C: the creek's water down the middle of its bed, from sample i0 to i1. owner >= 0: only where that road chunk owns the
+ * ground (the creek crossing the hut's clearing is drawn by the clearing's chunk, in both modes). Not under a closed bank,
+ * not near the road (the ford has its own). At the waterfall the water runs white. */
+static void build_creek_water(const Route *R, GB *b, int i0, int i1, int owner)
+{
+    const Col water = { 0.36f, 0.48f, 0.54f }, foam = { 0.86f, 0.90f, 0.92f };
+    int ncx = R->gx - 1;
+    b->sunlit = 1;
+    for (int i = i0; i < i1 && i + 1 < R->ck_n; i++) {
+        float s0 = (float)i * RT_DS, s1 = s0 + RT_DS;
+        if (owner >= 0) {
+            int ci = (int)((R->ck_x[i] - R->gx0) / R->cell), cj = (int)((R->ck_z[i] - R->gz0) / R->cell);
+            if (ci < 0 || cj < 0 || ci >= ncx || cj >= R->gy - 1 || R->owner[(size_t)cj * ncx + ci] != owner) continue;
+        }
+        RtNear rn = route_near(R, R->ck_x[i], R->ck_z[i]);
+        if (road_dist(R, rn) < 42.0f || route_edge(R, rn, R->ck_x[i], R->ck_z[i]) > -0.5f) continue;
+        float h0 = route_creek_bed(R, s0) + 0.1f, h1 = route_creek_bed(R, s1) + 0.1f;
+        float w0 = 0.3f * route_creek_bedw(R, s0) + 0.5f * vnoise(s0 / 20.0f, 2.0f) - 0.1f, w1 = 0.3f * route_creek_bedw(R, s1) + 0.5f * vnoise(s1 / 20.0f, 2.0f) - 0.1f;
+        float a0 = R->ck_head[i], a1 = R->ck_head[i + 1];
+        V3 p0 = v3(R->ck_x[i] + sinf(a0) * w0, h0, R->ck_z[i] - cosf(a0) * w0), p1 = v3(R->ck_x[i] - sinf(a0) * w0, h0, R->ck_z[i] + cosf(a0) * w0);
+        V3 p2 = v3(R->ck_x[i + 1] - sinf(a1) * w1, h1, R->ck_z[i + 1] + cosf(a1) * w1), p3 = v3(R->ck_x[i + 1] + sinf(a1) * w1, h1, R->ck_z[i + 1] - cosf(a1) * w1);
+        float steep = (h0 - h1) / RT_DS, glint = vnoise(R->ck_x[i] / 2.0f, R->ck_z[i] / 2.0f) > 0.62f ? 1.22f : 1.0f;
+        gb_quad_up(b, p0, p1, p2, p3, steep > 0.12f ? foam : cmul(water, glint));
+        b->g->ntri_other += 2;
+        if (R->ck_fall_s > 0 && s0 > R->ck_fall_s + 3.0f && s0 < R->ck_fall_s + 11.0f) {   /* foam spreading at the fall's foot */
+            float fw = w0 + 1.2f;
+            V3 q0 = v3(R->ck_x[i] + sinf(a0) * fw, h0 + 0.02f, R->ck_z[i] - cosf(a0) * fw), q1 = v3(R->ck_x[i] - sinf(a0) * fw, h0 + 0.02f, R->ck_z[i] + cosf(a0) * fw);
+            V3 q2 = v3(R->ck_x[i + 1] - sinf(a1) * fw, h1 + 0.02f, R->ck_z[i + 1] + cosf(a1) * fw), q3 = v3(R->ck_x[i + 1] + sinf(a1) * fw, h1 + 0.02f, R->ck_z[i + 1] - cosf(a1) * fw);
+            if (((int)(s0 / 2.0f)) % 2 == 0) { gb_quad_up(b, q0, q1, q2, q3, foam); b->g->ntri_other += 2; }
+        }
+    }
+    b->sunlit = -1;
+}
+/* Faint wheel ruts across the grass to the way in: two darker strips 1.8 m apart, easing in from the bank to the creek's line. */
+static void build_ruts(const Route *R, GB *b)
+{
+    const Col rut = { 0.40f, 0.42f, 0.24f };
+    float e0 = R->ck_exit_s - 70.0f, e1 = R->ck_exit_s + 4.0f;
+    V3 prev[2][2]; int have = 0;
+    for (float s0 = e0; s0 <= e1; s0 += 2.0f) {
+        float x, z, hd = route_heading_at_creek(R, s0); route_creek_point(R, s0, &x, &z);
+        float off = (route_creek_bedw(R, s0) + 3.0f) * (1.0f - smooth01((s0 - e0) / (e1 - e0)));
+        V3 row[2][2];
+        for (int w = 0; w < 2; w++) for (int k = 0; k < 2; k++) {
+            float lat = off + (w ? 0.9f : -0.9f) + (k ? 0.18f : -0.18f), px = x - sinf(hd) * lat, pz = z + cosf(hd) * lat;
+            row[w][k] = v3(px, route_height(R, px, pz, NULL) + 0.03f, pz);
+        }
+        if (have) for (int w = 0; w < 2; w++) { gb_quad_up(b, prev[w][0], prev[w][1], row[w][1], row[w][0], rut); b->g->ntri_other += 2; }
+        memcpy(prev, row, sizeof(prev)); have = 1;
+    }
+}
+static void build_creek_chunk(const Route *R, int index, RtGeom *g)
+{
+    int i0, i1; creek_chunk_span(R, index, &i0, &i1);
+    g->base_x = R->ck_x[i0]; g->base_z = R->ck_z[i0];
+    GB b = { g, RT_PART_GROUND, R, 0, 0, -1 };
+    build_terrain(R, index, &b);
+    build_trees(R, index, &b);
+    build_creek_water(R, &b, i0, i1, -1);
+    float es = R->ck_exit_s - 8.0f;
+    if (es >= (float)i0 * RT_DS && es < (float)i1 * RT_DS) build_ruts(R, &b);
+}
+
 void route_build_chunk(const Route *R, int index, RtGeom *g)
 {
+    if (index >= R->nchunks) {   /* build C: the creek way's */
+        struct timespec u0, u1; clock_gettime(CLOCK_MONOTONIC, &u0);
+        memset(g, 0, sizeof(*g)); g->index = index;
+        build_creek_chunk(R, index, g);
+        clock_gettime(CLOCK_MONOTONIC, &u1);
+        g->build_ms = (double)(u1.tv_sec - u0.tv_sec) * 1000.0 + (double)(u1.tv_nsec - u0.tv_nsec) / 1e6;
+        return;
+    }
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     memset(g, 0, sizeof(*g));
@@ -1461,6 +2437,7 @@ void route_build_chunk(const Route *R, int index, RtGeom *g)
     if (R->ford_s > 0 && R->ford_s >= c0 && R->ford_s < c1)
         build_water(R, R->ford_lo - 1.0f, R->ford_hi + 1.0f, route_half_width() + T.verge_w + T.ditch_w + 6.0f, R->ford_water, &b);
     if (R->bridge_s1 > R->bridge_s0 && R->bridge_s0 >= c0 && R->bridge_s0 < c1) build_bridge(R, &b);
+    if (R->ck_n > 1) build_creek_water(R, &b, 0, (int)((R->ck_exit_s + 6.0f) / RT_DS), index);   /* build C: the creek across the clearing */
     clock_gettime(CLOCK_MONOTONIC, &t1);
     g->build_ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
 }
@@ -1499,7 +2476,7 @@ int route_far_build(const Route *R, const char *path, RtGeom *tiles, int max_til
     const int step = 2, tile = 32;                    /* 40 m cells, tiles of 32 cells */
     int cx = (nx - 1) / step, cz = (ny - 1) / step, ntx = (cx + tile - 1) / tile, ntz = (cz + tile - 1) / tile, nt = 0;
     /* the height a far-land vertex is drawn at */
-    float *vh = malloc(sizeof(float) * (size_t)(cx + 1) * (cz + 1));
+    float *vh = malloc(sizeof(float) * (size_t)(cx + 1) * (cz + 1)), *vsk = calloc((size_t)(cx + 1) * (cz + 1), sizeof(float));   /* build C: vsk, how far each sinks along the creek way */
     unsigned char *vc = malloc((size_t)(cx + 1) * (cz + 1));
     for (int j = 0; j <= cz; j++)
         for (int i = 0; i <= cx; i++) {
@@ -1524,6 +2501,16 @@ int route_far_build(const Route *R, const char *path, RtGeom *tiles, int max_til
             }
             vh[(size_t)j * (cx + 1) + i] = hv;
             vc[(size_t)j * (cx + 1) + i] = (unsigned char)(forest * 255.0f);
+            if (R->ck_n > 1) {   /* build C: under the creek way's ground when it's there (the shader sinks it while you're in it) */
+                float vx = x0 + (float)(i * step) * cell, vz = y0 + (float)(j * step) * cell;
+                RtNear cn = route_creek_near(R, vx, vz);
+                if (cn.dist < 70.0f && cn.s > R->ck_exit_s - 60.0f) {
+                    float lo = 1e9f;
+                    for (float dz = -22.0f; dz <= 22.0f; dz += 5.5f) for (float dx = -22.0f; dx <= 22.0f; dx += 5.5f) lo = fminf(lo, route_dem(R, vx + dx, vz + dz));
+                    lo = fminf(lo, route_creek_bed(R, cn.s));
+                    vsk[(size_t)j * (cx + 1) + i] = fmaxf(hv - (lo - 2.0f), 0.0f) * (1.0f - smooth01((cn.dist - 48.0f) / 20.0f));
+                }
+            }
         }
     for (int tz = 0; tz < ntz && nt < max_tiles; tz++)
         for (int tx = 0; tx < ntx && nt < max_tiles; tx++) {
@@ -1534,21 +2521,30 @@ int route_far_build(const Route *R, const char *path, RtGeom *tiles, int max_til
             GB b = { g, RT_PART_GROUND, R, 0, 3, 1 };
             for (int j = tz * tile; j < (tz + 1) * tile && j < cz; j++)
                 for (int i = tx * tile; i < (tx + 1) * tile && i < cx; i++) {
-                    V3 p[4]; float f4 = 0;
+                    V3 p[4]; float f4 = 0, sk[4];
                     for (int q = 0; q < 4; q++) {
                         int ii = i + (q & 1), jj = j + (q >> 1);
                         p[q] = v3(x0 + (float)(ii * step) * cell, vh[(size_t)jj * (cx + 1) + ii], y0 + (float)(jj * step) * cell);
                         f4 += (float)vc[(size_t)jj * (cx + 1) + ii] / 255.0f * 0.25f;
+                        sk[q] = vsk[(size_t)jj * (cx + 1) + ii];
                     }
                     float mx = 0.5f * (p[0].x + p[3].x), mz = 0.5f * (p[0].z + p[3].z), nzv = vnoise(mx / 90.0f, mz / 90.0f);
                     Col grass = cmix(C_GRASS, col(0.50f, 0.52f, 0.28f), nzv), crown = cmix(col(0.20f, 0.28f, 0.15f), col(0.27f, 0.34f, 0.18f), nzv);
                     Col c = cmix(grass, crown, smooth01(f4 * 1.4f - 0.2f));
-                    gb_tri(&b, p[0], p[1], p[3], c, 1, p[0]);
-                    gb_tri(&b, p[0], p[3], p[2], cmul(c, 0.97f), 1, p[0]);
+                    if (sk[0] + sk[1] + sk[2] + sk[3] > 0) {   /* build C: the sink rides in the texture coordinate (u), the shader takes it off when wanted */
+                        float uva[6] = { sk[0], 3, sk[1], 3, sk[3], 3 }, uvb[6] = { sk[0], 3, sk[3], 3, sk[2], 3 };
+                        V3 na = vcross(vsub(p[1], p[0]), vsub(p[3], p[0])), nb2 = vcross(vsub(p[3], p[0]), vsub(p[2], p[0]));
+                        if (na.y < 0) na = vscale(na, -1);
+                        if (nb2.y < 0) nb2 = vscale(nb2, -1);
+                        gb_tri_ex(&b, p[0], p[1], p[3], c, na, 0, uva); gb_tri_ex(&b, p[0], p[3], p[2], cmul(c, 0.97f), nb2, 0, uvb);
+                    } else {
+                        gb_tri(&b, p[0], p[1], p[3], c, 1, p[0]);
+                        gb_tri(&b, p[0], p[3], p[2], cmul(c, 0.97f), 1, p[0]);
+                    }
                 }
             if (g->part[RT_PART_GROUND].nverts) nt++;
         }
-    free(vh); free(vc); free(dem); free(cov); free(dist);
+    free(vh); free(vsk); free(vc); free(dem); free(cov); free(dist);
     return nt;
 }
 
@@ -1572,7 +2568,7 @@ static void *stream_main(void *arg)
     pthread_mutex_lock(&S.mu);
     while (!S.stop) {
         int pick = -1; float best = 1e30f;
-        for (int c = 0; c < S.R->nchunks; c++)
+        for (int c = 0; c < S.R->nchunks + S.R->ck_nch; c++)
             if (S.want[c] && S.state[c] == CS_NONE && S.dist[c] < best) { best = S.dist[c]; pick = c; }
         if (pick < 0) { pthread_cond_wait(&S.cv, &S.mu); continue; }
         S.state[pick] = CS_BUILDING;
@@ -1618,11 +2614,11 @@ void route_stream_want(float x, float z, float radius)
     if (!S.running) return;
     pthread_mutex_lock(&S.mu);
     int changed = 0;
-    for (int c = 0; c < S.R->nchunks; c++) {
+    for (int c = 0; c < S.R->nchunks + S.R->ck_nch; c++) {
         float cx, cz, r;
         route_chunk_centre(S.R, c, &cx, &cz, &r);
         float d = hypotf(cx - x, cz - z) - r;
-        int w = d < radius;
+        int w = d < radius && (c < S.R->nchunks || S.R->creek_stream);   /* build C: the creek way only while it's wanted */
         S.dist[c] = d;
         if (w != S.want[c]) { S.want[c] = (unsigned char)w; changed = 1; }
         if (!w && S.state[c] == CS_READY) { route_geom_free(&S.ready[c]); S.state[c] = CS_NONE; }
@@ -1637,10 +2633,10 @@ int route_stream_take(RtGeom *out)
     if (!S.running) return 0;
     pthread_mutex_lock(&S.mu);
     int pick = -1; float best = 1e30f;
-    for (int c = 0; c < S.R->nchunks; c++) if (S.state[c] == CS_READY && S.dist[c] < best) { best = S.dist[c]; pick = c; }
+    for (int c = 0; c < S.R->nchunks + S.R->ck_nch; c++) if (S.state[c] == CS_READY && S.dist[c] < best) { best = S.dist[c]; pick = c; }
 #ifdef __EMSCRIPTEN__
     if (pick < 0) {   /* nothing ready: build the nearest wanted chunk now, one a frame */
-        for (int c = 0; c < S.R->nchunks; c++) if (S.want[c] && S.state[c] == CS_NONE && S.dist[c] < best) { best = S.dist[c]; pick = c; }
+        for (int c = 0; c < S.R->nchunks + S.R->ck_nch; c++) if (S.want[c] && S.state[c] == CS_NONE && S.dist[c] < best) { best = S.dist[c]; pick = c; }
         if (pick >= 0) {
             route_build_chunk(S.R, pick, &S.ready[pick]);
             S.st.built++; S.st.ms_sum += S.ready[pick].build_ms; if (S.ready[pick].build_ms > S.st.ms_max) S.st.ms_max = S.ready[pick].build_ms;
@@ -1675,7 +2671,7 @@ int route_stream_pending(void)
     if (!S.running) return 0;
     pthread_mutex_lock(&S.mu);
     int n = 0;
-    for (int c = 0; c < S.R->nchunks; c++) if (S.want[c] && S.state[c] != CS_TAKEN) n++;
+    for (int c = 0; c < S.R->nchunks + S.R->ck_nch; c++) if (S.want[c] && S.state[c] != CS_TAKEN) n++;
     pthread_mutex_unlock(&S.mu);
     return n;
 }

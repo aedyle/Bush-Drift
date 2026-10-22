@@ -33,9 +33,10 @@ done
 # the game's files, at the same relative paths the game opens (downloaded if missing)
 ./scripts/fetch-data.sh
 mkdir -p $OUT/apk/assets/data/built $OUT/apk/assets/assets-built $OUT/apk/assets/assets/sfx
-cp data/built/route.csv data/built/meta.txt data/built/terrain.bin data/built/canopy.bin data/built/far.bin $OUT/apk/assets/data/built/
+cp data/built/route.csv data/built/meta.txt data/built/terrain.bin data/built/canopy.bin data/built/far.bin data/built/creek.csv data/built/creek_dem.bin $OUT/apk/assets/data/built/
 cp assets-built/plants.txt assets-built/hut.txt assets-built/world.txt assets-built/lc79.car $OUT/apk/assets/assets-built/
 cp assets/sfx/*.ogg $OUT/apk/assets/assets/sfx/
+mkdir -p $OUT/apk/assets/assets/music && cp assets/music/*.ogg $OUT/apk/assets/assets/music/   # the finale's song (docs/CREDITS.md)
 
 # resources and manifest, then the native library, then align and sign
 $BT/aapt2 compile --dir android/res -o $OUT/res.zip

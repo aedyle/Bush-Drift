@@ -15,6 +15,6 @@ emcc -O2 -std=c99 -D_DEFAULT_SOURCE -DNO_SAMPLES -DPLATFORM_WEB -Ibuild -Iweb/th
     -sFORCE_FILESYSTEM=1 -lidbfs.js -sEXPORTED_RUNTIME_METHODS=ccall -sEXPORTED_FUNCTIONS=_main,_bd_touch_seen \
     --shell-file web/shell.html \
     --preload-file data/built/route.csv --preload-file data/built/meta.txt --preload-file data/built/terrain.bin \
-    --preload-file data/built/canopy.bin --preload-file data/built/far.bin \
-    --preload-file assets/sfx --preload-file assets-built/plants.txt --preload-file assets-built/hut.txt --preload-file assets-built/world.txt --preload-file assets-built/lc79.car
+    --preload-file data/built/canopy.bin --preload-file data/built/far.bin --preload-file data/built/creek.csv --preload-file data/built/creek_dem.bin \
+    --preload-file assets/sfx --preload-file assets-built/plants.txt --preload-file assets-built/hut.txt --preload-file assets-built/world.txt --preload-file assets-built/lc79.car --preload-file assets/music
 ls -la web/out

@@ -2,8 +2,8 @@
 <!-- Bush Drift for Android (session 3b): a NativeActivity running the raylib game, full screen, landscape. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.aedyle.bushdrift"
-    android:versionCode="2"
-    android:versionName="0.2">
+    android:versionCode="3"
+    android:versionName="0.3">
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
