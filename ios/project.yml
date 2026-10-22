@@ -78,6 +78,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Bush Drift
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"   # 0.3 etc., from the settings above
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UIRequiresFullScreen: true
         UIStatusBarHidden: true
         UIViewControllerBasedStatusBarAppearance: true

@@ -26,16 +26,22 @@ iCloud installed from Apple's website, not the Microsoft Store versions.
 
 ## Playing
 - Hold the phone sideways. Steer with the arrows on the left. GAS, BRAKE and HAND(brake) are on the right. Pause is
-  top left and restart (R) is top right.
-- Drive from Alexanders Hut to the Tantawangalo Creek bridge. A tree or a post ends the run, and the ditch slows you.
+  top left; R (restart in Drift, recover in Explore) and MAP are top right. In Explore, LOW (Low Range) is on the left.
+- **Drift:** drive from Alexanders Hut to the Tantawangalo Creek bridge. A tree or a post ends the run, and the ditch
+  slows you. **Explore:** no score and no clock; roam as you like.
+- The little skill games in Explore's pause menu: tap the left or right half of the screen.
 - A Bluetooth game controller works too.
 
 ## Please send back
-- A **screenshot while driving**. The small numbers in the top-left corner (fps, worst, slow) show how smoothly it
-  runs on your phone.
+- A **screenshot while driving**. The small numbers on the left, under the pause button (fps, worst, slow), show
+  how smoothly it runs on your phone.
 - Does it get warm? Does it stutter anywhere? Is the sound OK? Do the buttons feel right?
 - Anything else: https://aedyle.github.io/Bush-Drift/ has a feedback form.
 
 ## After 7 days
 With a free Apple ID, apps you install yourself stop opening after 7 days. To keep playing, plug the phone in and do
 step 2 again with the same file. Your records are kept.
+
+## Updating to a new version
+Install the new `BushDrift.ipa` the same way, over the top, with the **same Apple ID**. Don't delete the old app
+first: deleting it deletes your progress.

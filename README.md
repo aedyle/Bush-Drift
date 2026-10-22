@@ -75,8 +75,8 @@ make bush-drift && ./bush-drift
 The 79 model is downloaded by hand from Sketchfab (link in `docs/CREDITS.md`) into `src-models/j79-offroad/`.
 
 **Or skip those five build steps:** `./scripts/fetch-data.sh` downloads the built road and model files from the
-[Game data 2](https://github.com/aedyle/Bush-Drift/releases/tag/data-2) release (the same files the apps ship; data-2 is
-data-1 plus `assets-built/world.txt`).
+latest "Game data" release (the same files the apps ship; the release it uses, and its checksum, are in the
+script).
 
 Browser: `./web/build.sh` (Emscripten; see `web/README.md`). Android: `./android/build.sh` (`android/README.md`).
 iPhone: on a Mac with Xcode (`ios/README.md`).

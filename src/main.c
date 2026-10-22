@@ -4183,7 +4183,7 @@ static void draw_title(int sel)
                                      : "Alexanders Hut to the Tantawangalo Creek bridge.  A tree ends the run; the ditch slows you.", 400, 10, menu_dim);
     text_centred(TextFormat("Deer found %d of %d", world_found_count(), W.ndeer ? W.ndeer : WORLD_DEER), 418, 10, menu_dim);
 #if defined(BD_PHONE)
-    DrawText("Tap Drive to start.  In the game: steer on the left; gas, brake and handbrake on the right", 20, VIEW_H - 22, 10, menu_dim);
+    DrawText("Tap Drift or Explore to start.  In the game: steer on the left; gas, brake and handbrake on the right", 20, VIEW_H - 22, 10, menu_dim);
 #elif defined(__EMSCRIPTEN__)
     DrawText("Up/Down: move     Enter: choose     Esc: back     In the game: arrows drive, Space handbrake", 20, VIEW_H - 22, 10, menu_dim);
 #else
@@ -4251,6 +4251,8 @@ static int ach_pass(int a, int f)
 }
 typedef struct { int a, sec, y, h; } AchRow;   /* a < 0: a section's heading */
 #define ACH_Y0 98
+#define ACH_BACK ((Rectangle){ 14, 14, 86, 30 })   /* touch screens: the Back button, top left */
+static int touch_on;
 #define ACH_Y1 444
 static int ach_rows(AchRow *row, int *total)
 {
@@ -4269,6 +4271,7 @@ static void draw_achievements(void)
     int got = 0; for (int a = 0; a < ACH_N; a++) got += W.earned[a];
     int ntr = 0; for (int q = 0; q < 3; q++) ntr += W.tracked[q] != 0;
     text_centred("ACHIEVEMENTS", 12, 30, menu_ink);
+    if (touch_on) { Rectangle b = ACH_BACK; DrawRectangleLinesEx(b, 2, menu_ink); DrawText("< Back", (int)b.x + 10, (int)b.y + 6, 20, menu_ink); }
     text_centred(TextFormat("%d of %d, %d%% complete     tracking %d of 3", got, ACH_N, ach_pct(), ntr), 46, 10, menu_red);
     for (int f = 0; f < AF_N; f++) {   /* the filters */
         int x = 40 + 114 * f, on = f == ach_filter;
@@ -4315,7 +4318,7 @@ static void draw_achievements(void)
     if (ach_scroll < (float)(total - (ACH_Y1 - ACH_Y0)) - 1) DrawTriangle((Vector2){ 622, ACH_Y1 - 8 }, (Vector2){ 628, ACH_Y1 }, (Vector2){ 634, ACH_Y1 - 8 }, menu_ink);
     if (ach_say_t > 0 && ach_say) { int w = MeasureText(ach_say, 20); DrawRectangle(320 - w / 2 - 12, 230, w + 24, 34, (Color){ 20, 16, 30, 230 }); DrawText(ach_say, 320 - w / 2, 237, 20, RAYWHITE); }
 #if defined(BD_PHONE)
-    DrawText("Tap a filter, or an achievement to track it (up to 3).  Drag to scroll.  Back: the title", 20, VIEW_H - 16, 10, menu_dim);
+    DrawText("Tap a filter, or an achievement to track it (up to 3).  Drag to scroll.  < Back: the title", 20, VIEW_H - 16, 10, menu_dim);
 #else
     DrawText("Up/Down: move   Left/Right: filter   OK: track (up to 3, shown while driving)   Back: the title", 20, VIEW_H - 16, 10, menu_dim);
 #endif
@@ -4757,9 +4760,9 @@ static void look_set_mode(int mode)
  * screen, so the buttons go in the bars either side: steering on the left, gas, brake and handbrake on the right,
  * pause and restart in the top corners. Any finger on a button holds it; several at once work. */
 typedef struct { float x, y, r; int down, was; } TButton;
-enum { TB_LEFT, TB_RIGHT, TB_GAS, TB_BRAKE, TB_HAND, TB_PAUSE, TB_RESTART, TB_BANK, TB_N };
+enum { TB_LEFT, TB_RIGHT, TB_GAS, TB_BRAKE, TB_HAND, TB_PAUSE, TB_RESTART, TB_BANK, TB_MAP, TB_N };
 static TButton tb[TB_N];
-static int touch_on, touch_tap; static Vector2 touch_tap_at, touch_start; static int touch_prev_n; static float touch_moved;   /* build E: how far the finger has gone since it went down (a drag, not a tap) */
+static int touch_on, touch_tap, touch_new; static Vector2 touch_tap_at, touch_start, touch_new_at; static int touch_prev_n; static float touch_moved;   /* build E: how far the finger has gone since it went down (a drag, not a tap) */
 static Rectangle touch_game;   /* where the picture is on the screen */
 static float safe_l, safe_r, safe_t, safe_b;   /* the screen edges to keep buttons off (iOS: the notch and the home bar) */
 
@@ -4784,6 +4787,7 @@ static void touch_update(void)
     tb[TB_PAUSE] = (TButton){ r * 0.75f, r * 0.75f, r * 0.55f, 0, tb[TB_PAUSE].down };
     tb[TB_RESTART] = (TButton){ sw - r * 0.75f, r * 0.75f, r * 0.55f, 0, tb[TB_RESTART].down };
     tb[TB_BANK] = (TButton){ cl, sh * 0.42f, r * 0.85f, 0, tb[TB_BANK].down };   /* build A: above the steering, for a quick left-thumb tap */
+    tb[TB_MAP] = (TButton){ sw - r * 0.75f, r * 0.75f + r * 1.35f, r * 0.55f, 0, tb[TB_MAP].down };   /* the map while driving (M), under R */
     for (int i = 0; i < TB_N; i++) {   /* keep every button wholly on the screen */
         tb[i].x = clampf(tb[i].x, safe_l + tb[i].r * 1.05f, sw - safe_r - tb[i].r * 1.05f);
         tb[i].y = clampf(tb[i].y, safe_t + tb[i].r * 1.05f, sh - safe_b - tb[i].r * 1.05f);
@@ -4795,6 +4799,8 @@ static void touch_update(void)
     }
     /* a tap: one finger down and up again without moving far (for the menus and the end of a run) */
     touch_tap = 0;
+    touch_new = n > touch_prev_n;   /* a finger just went down (the skill games: which half of the screen) */
+    if (touch_new) touch_new_at = GetTouchPosition(n - 1);
     if (n > 0 && touch_prev_n == 0) { touch_start = GetTouchPosition(0); touch_moved = 0; }
     if (n > 0) { Vector2 p0 = GetTouchPosition(0); touch_moved = fmaxf(touch_moved, hypotf(p0.x - touch_start.x, p0.y - touch_start.y)); }
     if (n == 0 && touch_prev_n > 0) { touch_tap = 1; touch_tap_at = touch_start; }
@@ -4814,6 +4820,7 @@ static void web_storage_flush(void) { emscripten_run_script("try { FS.syncfs(fal
 static void web_storage_flush(void) { }
 #endif
 static int tb_pressed(int i) { return tb[i].down && !tb[i].was; }
+static int tb_at(Vector2 p) { for (int i = 0; i < TB_N; i++) { float dx = p.x - tb[i].x, dy = p.y - tb[i].y; if (dx * dx + dy * dy < tb[i].r * tb[i].r * 1.4f) return i; } return -1; }
 static Vector2 touch_to_view(Vector2 p) { return (Vector2){ (p.x - touch_game.x) / touch_game.width * VIEW_W, (p.y - touch_game.y) / touch_game.height * VIEW_H }; }
 
 static int low_shown;   /* build D: Low Range is on (the LOW button lit) */
@@ -4833,6 +4840,7 @@ static void touch_draw(int in_game)
         float a = b->r * 0.42f;
         if (i == TB_LEFT) DrawTriangle((Vector2){ b->x - a, b->y }, (Vector2){ b->x + a * 0.7f, b->y + a }, (Vector2){ b->x + a * 0.7f, b->y - a }, ink);
         else if (i == TB_RIGHT) DrawTriangle((Vector2){ b->x + a, b->y }, (Vector2){ b->x - a * 0.7f, b->y - a }, (Vector2){ b->x - a * 0.7f, b->y + a }, ink);
+        else if (i == TB_MAP) { int fs = (int)(b->r * 0.55f); DrawText("MAP", (int)(b->x - MeasureText("MAP", fs) * 0.5f), (int)(b->y - fs * 0.5f), fs, ink); }
         else if (i == TB_PAUSE) { DrawRectangleRec((Rectangle){ b->x - a * 0.7f, b->y - a, a * 0.5f, a * 2 }, ink); DrawRectangleRec((Rectangle){ b->x + a * 0.2f, b->y - a, a * 0.5f, a * 2 }, ink); }
         else {
             const char *t = i == TB_GAS ? "GAS" : i == TB_BRAKE ? "BRAKE" : i == TB_HAND ? "HAND" : i == TB_BANK ? (explore ? "LOW" : "BANK") : "R";
@@ -4875,7 +4883,7 @@ static void draw_explore_hud(const Car *c, int frame)
     if (W.rifle == 1) DrawText("QUAYLE'S RIFLE", 12, 46, 10, (Color){ 150, 210, 110, 255 });
     else if (W.tray_deer) DrawText("A DEER IN THE TRAY", 12, 46, 10, (Color){ 255, 170, 70, 255 });
     else if (W.quayle == 1) DrawText("QUAYLE IN THE TRAY", 12, 46, 10, (Color){ 150, 210, 110, 255 });
-    if (T.minimap == 0) DrawText("M: map", 12, VIEW_H - 16, 10, (Color){ 255, 248, 230, 150 });
+    if (T.minimap == 0 && !touch_on) DrawText("M: map", 12, VIEW_H - 16, 10, (Color){ 255, 248, 230, 150 });
     if (T.saw_on != 0 && W.tray_wood < (int)T.wood_full) {   /* build E: a firewood log just ahead: your speed against the saw's sweet spot */
         static int widx[400], nw = -1;
         if (nw < 0) { nw = 0; for (int k = 0; k + 1 < RT.ntree && nw < 400; k++) { const RtTree *t = &RT.tree[k]; if (t->wood && t->kind != 5 && t->kind != 6 && t->t0 >= 0 && !strcmp(route_template(t->t0)->name, "log")) widx[nw++] = k; } }
@@ -5021,10 +5029,12 @@ static void skill_draw(void)
     DrawRectangle(bx + bw / 2 - 8, by, 16, 18, (Color){ 120, 200, 120, 255 });
     int mx = bx + (int)(skill_pos() * (float)bw);
     DrawRectangle(mx - 2, by - 6, 4, 30, sk.flash > 0 ? (sk.last_ok ? (Color){ 150, 255, 150, 255 } : (Color){ 255, 120, 90, 255 }) : RAYWHITE);
-    const char *keys = sk.kind == SK_SAW ? (want < 0 ? "LEFT  (keyboard, D-pad, or the left button)" : "RIGHT  (keyboard, D-pad, or the right button)") : "any of LEFT, RIGHT, OK";
+    const char *keys = touch_on ? (sk.kind == SK_SAW ? (want < 0 ? "tap the LEFT half of the screen" : "tap the RIGHT half of the screen") : "tap anywhere")
+                     : sk.kind == SK_SAW ? (want < 0 ? "LEFT  (keyboard, D-pad, or the left button)" : "RIGHT  (keyboard, D-pad, or the right button)") : "any of LEFT, RIGHT, OK";
     DrawText(keys, 320 - MeasureText(keys, 10) / 2, 292, 10, (Color){ 220, 210, 230, 255 });
     DrawText(TextFormat("%d of %d", sk.i, sk.n), 320 - MeasureText(TextFormat("%d of %d", sk.i, sk.n), 10) / 2, 310, 10, (Color){ 200, 200, 210, 255 });
-    DrawText("Back: stop", 80, 380, 10, (Color){ 180, 180, 190, 255 });
+    if (touch_on) text_centred("Pause button: stop", 380, 10, (Color){ 180, 180, 190, 255 });
+    else DrawText("Back: stop", 80, 380, 10, (Color){ 180, 180, 190, 255 });
 }
 /* build E, selftest: the saw's passes and wear, the skill games' results, the new save lines */
 static int gcheck(int ok, const char *what) { printf("  %s  %s\n", ok ? "ok  " : "FAIL", what); return ok; }
@@ -5421,6 +5431,7 @@ int main(int argc, char **argv)
             if (tb_pressed(TB_RESTART)) reset = 1;
             if (tb_pressed(TB_BANK)) { if (explore) low_req = 1; else bank_req = 1; }   /* build D: in Explorer the button is LOW */
             if (tb_pressed(TB_PAUSE)) leave = 1;
+            if (tb_pressed(TB_MAP)) { T.minimap = T.minimap != 0 ? 0.0f : 1.0f; snprintf(status, sizeof(status), "map while driving: %s", T.minimap != 0 ? "on" : "off"); status_time = 2; }
             if (over && touch_tap && CheckCollisionPointRec(touch_tap_at, touch_game)) reset = 1;   /* run over: tap to go again */
         }
         if (touch_on && !in_game && touch_tap) {   /* menus: tap an item */
@@ -5428,6 +5439,8 @@ int main(int argc, char **argv)
             if (screen == SCR_TITLE && reset_ask) { }   /* the Yes / No buttons: handled with the menu below */
             else if (screen == SCR_TITLE) {
                 for (int i = 0; i < MENU_SHOWN; i++) if (v.x > 170 && v.x < 495 && v.y > MENU_Y0 - 3 + MENU_DY * i && v.y < MENU_Y0 + 31 + MENU_DY * i) { menu_sel = i; m_ok = 1; }
+            } else if (screen == SCR_ACH) {   /* the list takes its own taps; only its Back button leaves */
+                if (touch_moved < 12.0f && CheckCollisionPointRec(v, ACH_BACK)) m_back = 1;
             } else m_back = 1;
         }
         int reload = IsKeyPressed(KEY_F5);
@@ -5576,6 +5589,7 @@ int main(int argc, char **argv)
             int kl = IsKeyPressed(KEY_LEFT) || (pad >= 0 && IsGamepadButtonPressed(pad, GAMEPAD_BUTTON_LEFT_FACE_LEFT)) || (touch_on && tb_pressed(TB_LEFT));
             int kr = IsKeyPressed(KEY_RIGHT) || (pad >= 0 && IsGamepadButtonPressed(pad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) || (touch_on && tb_pressed(TB_RIGHT));
             int key = kl ? -1 : kr ? 1 : (m_ok || (touch_on && tb_pressed(TB_GAS))) ? 2 : 0;
+            if (touch_on && !key && touch_new && !tb_pressed(TB_PAUSE) && !tb_pressed(TB_RESTART) && !tb_pressed(TB_MAP)) key = touch_new_at.x < GetScreenWidth() * 0.5f ? -1 : 1;   /* phones: tap the left or right half */
             if (getenv("SHOT_SKILL")) { float pos = skill_pos(); key = fabsf(pos - 0.5f) < 0.03f ? (skill_want() ? skill_want() : 2) : 0; }   /* pictures and tests: a steady hand */
             if (key == 2 && skill_want() != 0) key = 0;   /* a side is wanted: OK does nothing */
             if ((m_back || leave) && sk.res_t <= 0) { sk.on = 0; leave = 0; m_back = 0; }
@@ -5672,21 +5686,21 @@ int main(int argc, char **argv)
             if (status_time > 0) { text_centred(status, VIEW_H - 44, 10, MAROON); status_time -= dt; }
             goto present;
         }
-        if (in_game && hutnight_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap))) { hutnight_t = -1; leave = m_ok = m_back = 0; reset = 0; }   /* the finale skipped */
-        if (in_game && cut_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap))) {   /* the wood cutscene skipped: straight to its end */
+        if (in_game && hutnight_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap && tb_at(touch_tap_at) < 0))) { hutnight_t = -1; leave = m_ok = m_back = 0; reset = 0; }   /* the finale skipped */
+        if (in_game && cut_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap && tb_at(touch_tap_at) < 0))) {   /* the wood cutscene skipped: straight to its end */
             if (cut_level >= 3 && fireworks_t < 0) fireworks_t = 0;
             cut_t = -1; cam_snap = 1; leave = m_ok = m_back = 0; reset = 0;
         }
         if (in_game && hn_move) { car_reset(&car, v3(RT.start_x, 0.75f, RT.start_z), RT.start_yaw); prev_pos = car.body.pos; prev_rot = car.body.rot; cg.init = 0; hn_move = 0; }   /* the replay: parked at the hut */
         if (hn_replay && hutnight_t < 0) hn_replay_end();   /* the replay over (or skipped): the fire and the night as they were */
-        if (in_game && scut_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap))) { scut_t = -1; cam_snap = 1; leave = m_ok = m_back = 0; reset = 0; }   /* the stew's cutscene skipped */
+        if (in_game && scut_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap && tb_at(touch_tap_at) < 0))) { scut_t = -1; cam_snap = 1; leave = m_ok = m_back = 0; reset = 0; }   /* the stew's cutscene skipped */
         if (in_game && scut_t >= 0) {
             if (scut_move) { car_reset(&car, v3(RT.start_x, 0.75f, RT.start_z), RT.start_yaw); prev_pos = car.body.pos; prev_rot = car.body.rot; cg.init = 0; scut_move = 0; }
             if (scut_t < SCUT_CUT + 1.0f && scut_t + dt >= SCUT_CUT + 1.0f) { synth_blip2(4, 0.9f, 1.0f); puff(vadd(oven_at, v3(0, -0.1f, 0)), 4, 0.3f, 0.2f); }   /* the pot down on the table */
             scut_t += dt;
             if (scut_t > SCUT_END) { scut_t = -1; cam_snap = 1; }
         }
-        if (in_game && bcut_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap))) { bcut_t = -1; cam_snap = 1; leave = m_ok = m_back = 0; reset = 0; }   /* the board's cutscene skipped */
+        if (in_game && bcut_t > 0.5f && (m_ok || m_back || leave || (touch_on && touch_tap && tb_at(touch_tap_at) < 0))) { bcut_t = -1; cam_snap = 1; leave = m_ok = m_back = 0; reset = 0; }   /* the board's cutscene skipped */
         if (in_game && bcut_t >= 0) {
             if (bcut_move) { car_reset(&car, v3(RT.start_x, 0.75f, RT.start_z), RT.start_yaw); prev_pos = car.body.pos; prev_rot = car.body.rot; cg.init = 0; bcut_move = 0; }
             int n = 0; for (int i = 0; i < HAMPER_N; i++) n += bcut_t >= BCUT_ITEM0 + (float)i * BCUT_DT + BCUT_FLY;
@@ -6521,7 +6535,7 @@ int main(int argc, char **argv)
             DrawText(at, 320 - w2 / 2 + 12, 410, 20, (Color){ 255, 220, 140, (unsigned char)(255 * a) });
             ach_pop.t -= dt;
         }
-        if (T.minimap != 0 && run.state < RUN_FINISHED) draw_route_map(8, 64, 120, 90, rt_max_s, 1, car.body.pos, 0);   /* build B: the optional map while driving (M) */
+        if (T.minimap != 0 && run.state < RUN_FINISHED) draw_route_map(8, explore ? 96 : 64, 120, 90, rt_max_s, 1, car.body.pos, 0);   /* build B: the optional map while driving (M); Explorer: under its readout */
         if (yodel.active) {   /* Drift Yodel: the horns, the minute counting down, the doubled scoring */
             int bob = (int)(2.0f * sinf((float)GetTime() * 9.0f));
             draw_horns(10, 120 + bob, 3);
@@ -6688,8 +6702,13 @@ int main(int argc, char **argv)
         {   /* the iPhone play test: frame times in the corner, for testers' screenshots */
             float fm, fw, fwa; int fs;
             bd_ios_frame_stats(&fm, &fw, &fwa, &fs);
-            if (fm > 0) DrawText(TextFormat("%.0f fps  worst %.0f ms  slow %d", 1000.0f / fm, fwa, fs),
-                                 (int)(dst.x + 6), (int)(dst.y + 6), 10, (Color){ 255, 255, 255, 170 });
+            if (fm > 0) {   /* in the left-hand bar under the pause button, clear of the game's own readouts */
+                int x = (int)(tb[TB_PAUSE].x - tb[TB_PAUSE].r), y = (int)(tb[TB_PAUSE].y + tb[TB_PAUSE].r + 6);
+                Color c = { 255, 255, 255, 170 };
+                DrawText(TextFormat("%.0f fps", 1000.0f / fm), x, y, 10, c);
+                DrawText(TextFormat("worst %.0f ms", fwa), x, y + 11, 10, c);
+                DrawText(TextFormat("slow %d", fs), x, y + 22, 10, c);
+            }
         }
 #endif
         EndDrawing();
