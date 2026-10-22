@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bush Drift play test</title>
+<meta name="description" content="Help play-test Bush Drift: drift a LandCruiser 79 down a real dirt road in the South East Forest, NSW. Runs in the browser.">
+<meta property="og:title" content="Bush Drift play test">
+<meta property="og:description" content="Drift a LandCruiser 79 down 7.8 km of real dirt road in the South East Forest, NSW. In your browser.">
+<meta property="og:image" content="drift.png">
+<style>
+  :root { --bg: #f4efe6; --ink: #1d2328; --dim: #5d6b72; --card: #fffaf2; --line: #e3d9c8; --accent: #c8452d; --accent-ink: #fff; --gold: #b07a12; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #15181b; --ink: #ece6dc; --dim: #a3aeb4; --card: #1d2125; --line: #2f353a; --accent: #e0603f; --accent-ink: #fff; --gold: #e2b44d; } }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--ink); background: var(--bg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 28px 16px 48px; }
+  header h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.05; margin: 8px 0 6px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--dim); font-size: 18px; }
+  .kicker { text-transform: uppercase; letter-spacing: .12em; font-size: 12px; color: var(--accent); font-weight: 700; }
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 22px 0 18px; }
+  .shots img { width: 100%; height: auto; display: block; border-radius: 8px; image-rendering: pixelated; border: 1px solid var(--line); }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 8px 0 26px; }
+  .btn { display: inline-block; padding: 14px 22px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 18px; }
+  .btn.play { background: var(--accent); color: var(--accent-ink); }
+  .btn.android { background: #3d7a3a; }
+  .btn.fb { border: 2px solid var(--ink); color: var(--ink); font-size: 16px; padding: 11px 18px; }
+  .note { color: var(--dim); font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h2 { font-size: 18px; margin: 0 0 8px; }
+  .card ul, .card ol { margin: 0; padding-left: 20px; }
+  .card li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 4px 0; vertical-align: top; }
+  td:first-child { width: 46%; }
+  kbd { font: 600 13px/1 ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 3px 6px; }
+  .wide { grid-column: 1 / -1; }
+  footer { margin-top: 26px; color: var(--dim); font-size: 13px; }
+  footer a, .card a { color: inherit; }
+  @media (max-width: 640px) { .shots, .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="kicker">Play test · help wanted</div>
+    <h1>Bush Drift</h1>
+    <p>Drift a LandCruiser 79 down 7.8 km of real dirt road, from Alexanders Hut in the South East Forest (NSW) to the Tantawangalo Creek bridge. Hit a tree or a post and the run's over. Or choose <b>Explore</b> on the title and roam the bush at your own pace.</p>
+  </header>
+
+  <div class="shots">
+    <img src="start.png" width="640" height="480" alt="The ute parked at the start, Alexanders Hut on the left, the dirt road ahead">
+    <img src="drift.png" width="640" height="480" alt="The ute sliding sideways through a bend in the bush, scoring points">
+  </div>
+
+  <div class="cta">
+    <a class="btn play" href="play.html">▶ Play in your browser</a>
+    <a class="btn play android" href="https://github.com/aedyle/Bush-Drift/releases/latest/download/bush-drift.apk">⬇ Android app</a>
+    <a class="btn fb" href="https://github.com/aedyle/Bush-Drift/issues/new?template=playtest.yml">Tell me how it went</a>
+    <span class="note">Browser: a computer with a keyboard is best (Chrome, Edge, Firefox or Safari; about 12 MB). On an Android phone, get the app (5 MB): steps below.</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Controls</h2>
+      <table>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>steer</td></tr>
+        <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>accelerate / brake</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>handbrake (swing the back out)</td></tr>
+        <tr><td><kbd>L</kbd></td><td>Low Range, the 79's 4WD low (Explore only; slow down first)</td></tr>
+        <tr><td><kbd>R</kbd></td><td>restart from the hut</td></tr>
+        <tr><td><kbd>H</kbd></td><td>handling: safer / best / drift</td></tr>
+        <tr><td><kbd>P</kbd></td><td>pixel size</td></tr>
+        <tr><td><kbd>M</kbd></td><td>small map while driving (on / off)</td></tr>
+        <tr><td><kbd>Enter</kbd> / <kbd>Esc</kbd></td><td>menus</td></tr>
+      </table>
+      <p class="note">Click the game once first so it gets the keyboard and the sound.</p>
+    </div>
+    <div class="card">
+      <h2>Scoring</h2>
+      <ul>
+        <li>Any slide fills the <b>pot</b>: the more sideways and the faster, the more points.</li>
+        <li>Keep sliding and the <b>multiplier</b> climbs (up to ×9). No time-out.</li>
+        <li>The pot (× multiplier) is <b>banked</b> when you leave the road: two wheels in the ditch, or off into the bush. The bridge banks it too.</li>
+        <li>Crash into a tree or a post and the unbanked pot is lost, and the run's over. <b>Logs</b> splinter: each one is firewood in the tray.</li>
+        <li><b>Donuts</b> on the road: +500 each (full lock and throttle from a stop). Practise in the car park.</li>
+        <li><b>Off the road</b> is fine to explore for 15 seconds (it says OFF-ROAD and counts down), then you're put back on the track. Nothing scores off the road, the hut's clearing included. There's no way through the bank at the bush's edge, and the bridge needs every checkpoint along the road.</li>
+        <li><b>20 deer</b> are hidden in the bush, the same spots every run. Drive into one to find it. Your finds and the hidden <b>achievements</b> are kept on your device (title menu → Achievements).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Explore (new in play test 3)</h2>
+      <ul>
+        <li>No score and no clock: drive the road both ways, or off it, as long as you like. Trees just stop you.</li>
+        <li><b>Firewood:</b> split logs (hit them at 15 to 35 km/h) and bring a full tray back to the hut. Will's chainsaw blunts as you go; sharpen it at the hut (pause menu).</li>
+        <li><b>The hut's clearing</b> hides the makings of a charcuterie board. Find all twelve.</li>
+        <li><b>Low Range</b> (<kbd>L</kbd>, or LOW on a phone): the 79's 4WD low, for crawling up steep, rough ground.</li>
+        <li>Hard knocks and big landings hurt the ute. A flat? Change the tyre from the pause menu; the hut fixes everything.</li>
+        <li><b>Achievements</b> now have sections, filters and clues for the hidden ones. Track up to three and they show while you drive.</li>
+        <li>Pause (<kbd>Esc</kbd>, or the button top left): map, back to the hut, start a new day.</li>
+      </ul>
+    </div>
+    <div class="card wide">
+      <h2>The route</h2>
+      <img src="birdseye.png" width="1280" height="960" style="width:100%;height:auto;border-radius:8px" alt="The route from above: Alexanders Hut at the top left, down through the forest past Solomons Creek ford to the Tantawangalo Creek bridge at the bottom right, 7.8 km by road">
+      <p class="note">7.8 km by road: Alexanders Hut (918 m) across the plateau, down the descent to Solomons Creek ford (km 6.6) and on to the Tantawangalo Creek bridge (663 m). The game's own ground from above; the road from OpenStreetMap and NSW Spatial Services data.</p>
+    </div>
+    <div class="card wide">
+      <h2>Android: installing the app</h2>
+      <ol>
+        <li>On your phone, tap <b>⬇ Android app</b> above. It downloads <code>bush-drift.apk</code>.</li>
+        <li>Open the download. Android asks to allow installing apps from your browser: tap <b>Settings</b>, switch on <b>Allow from this source</b>, then go back.</li>
+        <li>Tap <b>Install</b>. If Play Protect warns about an unknown developer, choose <b>More details → Install anyway</b> (it's not from the Play Store, that's all).</li>
+        <li>Turn the phone sideways. Steer with the two buttons on the left; <b>GAS</b>, <b>BRAKE</b> and <b>HAND</b> (handbrake) on the right; <b>LOW</b> (Low Range, in Explore) on the left; pause and restart at the top.</li>
+      </ol>
+      <p class="note">Android 10 or newer. iPhones: not yet (try the browser version on an iPad or computer).</p>
+    </div>
+    <div class="card wide">
+      <h2>What I'd love to know</h2>
+      <ol>
+        <li>Does it run smoothly on your computer or phone (which browser or phone)?</li>
+        <li>How far did you get, and what ended your runs?</li>
+        <li>The handling: too grippy, about right, or too slippery? Try <kbd>H</kbd> for the other presets. On a phone: are the touch buttons the right size and place?</li>
+        <li>Explore: what did you find, and where did you get stuck?</li>
+        <li>What was fun, and what was annoying or confusing?</li>
+        <li>Sound, look, scoring: anything that feels off.</li>
+      </ol>
+      <p class="note">The feedback button opens a short form on GitHub (a free account is needed). Or just message me.</p>
+    </div>
+  </div>
+
+  <footer>
+    Build 2026-10-22 7a57ad3 · <a href="https://github.com/aedyle/Bush-Drift">source</a><br>
+    Road line © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL; the game's road data is available under the ODbL). Elevation and tree cover from NSW DEM and imagery © State of NSW (Spatial Services), CC BY 4.0.
+    Ute: a modified voxel version of “Toyota Land Cruiser J79 Pickup Off- Road” by <a href="https://sketchfab.com/DR1KING100K">DR1KING100K</a> (CC BY 4.0). Sounds: CC0 recordings from Freesound. Song: “The Late Cake” by willfarrell85. Made with raylib.
+    <a href="https://github.com/aedyle/Bush-Drift/blob/main/docs/CREDITS.md">Full credits</a>.
+  </footer>
+</div>
+</body>
+</html>
